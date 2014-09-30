@@ -185,6 +185,17 @@ func main() {
 }
 
 /*
+
+fixfingers(){
+	elt.FingerTable[1] = elt.Successor
+	...
+
+	for elt.NextFinger < keySize &&
+	between(elt.Address.GetHash(),elt.jump(),)
+
+}
+
+
 Notes uint8 and sha1:
 
 package main
