@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,46 +10,169 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"math/big"
 )
 
 type Data struct {
 	vals map[string]string
 }
 
+type StringPair struct {
+	Key   string
+	Value string
+}
+
 type Node struct {
-	port      string
-	data      chan *Data
-	successor *rpc.Client
+	port           string
+	data           chan *Data
+	successor      *rpc.Client
 	successor_addr string
-	listening bool
+	listening      bool
 }
 
 //Helper functions///////////////////////////////////////////
-func get_second_string(command string, skip string) string {
+func get_second_string(command string, skip string) (string, string) {
 	parts := strings.Split(command, " ")
 	ret := ""
-	for _, what := range parts {
+	remain := command //Whatever the sentence is after first skip word is removed
+	for key, what := range parts {
 		if what != "" && what != skip {
 			ret = what
+			remain = strings.Join(parts[key:], " ")
 			break
 		}
 	}
-	return ret
+	return ret, remain
 }
 
+//////////////////////////////////////////////////////////////
 //Server only commands////////////////////////////////////////
 
+//////////////////////////////////////////////////////////////
 //Server-Keyboard commands////////////////////////////////////
-func (n Node) Get_respond(str string, reply *string) error {
+func (n Node) Put_reciever(pair StringPair, existed *bool) error {
 	m := <-n.data
-	*reply = m.vals[str]
+	key := pair.Key
+	if _, ok := m.vals[key]; ok {
+		*existed = true
+		m.vals[pair.Key] = pair.Value
+	} else {
+		*existed = false
+		m.vals[pair.Key] = pair.Value
+	}
 	n.data <- m
 	return nil
 }
 
-func get(string) {
+func put(command string) { //Assuming that the string is correct length currently
+	address, remain := get_second_string(command, "put")
+	skey, remain2 := get_second_string(remain, address)
+	svalue, _ := get_second_string(remain2, skey)
 
+	pair := &StringPair{
+		Key:   skey,
+		Value: svalue,
+	}
+
+	if address != "" {
+		client, err := rpc.DialHTTP("tcp", address)
+		if err != nil {
+			log.Println("Put connect:", err)
+		} else {
+			reply := false
+			err := client.Call("Node.Put_reciever", pair, &reply)
+			if err != nil {
+				log.Println("Remote Put Error:", err)
+			} else {
+				log.Println("Success. Key Existed:", reply)
+			}
+			errc := client.Close()
+			if errc != nil {
+				log.Println("Closing rpc error:", errc)
+			}
+		}
+	} else {
+		log.Println("Put format: put <#.#.#.#:port#> <key> <value>")
+	}
+}
+
+func (n Node) Get_respond(key string, reply *string) error {
+	m := <-n.data
+	if _, ok := m.vals[key]; ok {
+		*reply = m.vals[key]
+		n.data <- m
+		return nil
+	}
+	n.data <- m
+	return errors.New("Key [" + key + "] does not exist")
+
+}
+
+func get(command string) {
+	address, remain := get_second_string(command, "get")
+	skey, _ := get_second_string(remain, address)
+
+	if address != "" {
+		client, err := rpc.DialHTTP("tcp", address)
+		if err != nil {
+			log.Println("Get connect:", err)
+		} else {
+			var reply string
+			err := client.Call("Node.Get_respond", skey, &reply)
+			if err != nil {
+				log.Println("Remote Get Error:", err)
+			} else {
+				//////////////
+				//Key is found
+				log.Println(skey, "=>", reply)
+			}
+			errc := client.Close()
+			if errc != nil {
+				log.Println("Closing rpc error:", errc)
+			}
+		}
+	} else {
+		log.Println("Get format: get <#.#.#.#:port#> <key>")
+	}
+}
+
+func (n Node) Delete_request(key string, reply *bool) error {
+	m := <-n.data
+	if _, ok := m.vals[key]; ok {
+		//log.Println("!!!!",m.vals[key])
+		delete(m.vals,key)
+		n.data <- m
+		return nil
+	}
+	n.data <- m
+	return errors.New("Key [" + key + "] does not exist")
+}
+
+func delete(command string) {
+	address, remain := get_second_string(command, "delete")
+	skey, _ := get_second_string(remain, address)
+
+	if address != "" {
+		client, err := rpc.DialHTTP("tcp", address)
+		if err != nil {
+			log.Println("Delete connect:", err)
+		} else {
+			var reply bool
+			err := client.Call("Node.Delete_request", skey, &reply)
+			if err != nil {
+				log.Println("Remote Delete Error:", err)
+			} else {
+				//////////////
+				//Key is found
+				log.Println("Successfully Removed")
+			}
+			errc := client.Close()
+			if errc != nil {
+				log.Println("Closing rpc error:", errc)
+			}
+		}
+	} else {
+		log.Println("Delete format: delete <#.#.#.#:port#> <key>")
+	}
 }
 
 func (n Node) Ping_respond(empty bool, reply *bool) error {
@@ -57,7 +181,7 @@ func (n Node) Ping_respond(empty bool, reply *bool) error {
 }
 
 func ping(command string) {
-	address := get_second_string(command, "ping")
+	address, _ := get_second_string(command, "ping")
 	if address != "" {
 		client, err := rpc.DialHTTP("tcp", address)
 		if err != nil {
@@ -80,6 +204,7 @@ func ping(command string) {
 	}
 }
 
+///////////////////////////////////////////////////////////////
 //Keyboard Commands only///////////////////////////////////////
 func set_port(node *Node, command string) {
 	parts := strings.Split(command, " ")
@@ -96,12 +221,12 @@ func set_port(node *Node, command string) {
 }
 
 func connect_successor(node *Node, command string) {
-	address := get_second_string(command, "join")
+	address, _ := get_second_string(command, "join")
 	client, err := rpc.DialHTTP("tcp", address)
 	if err != nil {
 		log.Println("Ping:", err)
 	} else {
-		log.Println("Joining Ring at:",address)
+		log.Println("Joining Ring at:", address)
 		go listen(node)
 		node.successor = client
 		node.successor_addr = address
@@ -122,7 +247,7 @@ func listen(node *Node) {
 func dump(node *Node) {
 	fmt.Println()
 	fmt.Println()
-	log.Println("Listening port:",node.port,"Successor_addr:",node.successor_addr,"Listening:",node.listening)
+	log.Println("Listening port:", node.port, "Successor_addr:", node.successor_addr, "Listening:", node.listening)
 	log.Println("-Data---------------------------------------")
 	m := <-node.data
 	log.Println(m.vals)
@@ -137,11 +262,11 @@ func main() {
 		vals: make(map[string]string),
 	}
 	node := &Node{
-		port:      "3410",
-		data:      make(chan *Data, 1),
-		successor: nil,
+		port:           "3410",
+		data:           make(chan *Data, 1),
+		successor:      nil,
 		successor_addr: "",
-		listening: false,
+		listening:      false,
 	}
 	node.data <- data
 	for scanner.Scan() {
@@ -175,6 +300,12 @@ func main() {
 			}
 		case strings.HasPrefix(line, "ping "): //Ping
 			ping(line)
+		case strings.HasPrefix(line, "put "): //put
+			put(line)
+		case strings.HasPrefix(line, "get "): //get
+			get(line)
+		case strings.HasPrefix(line,"delete "): //delete
+			delete(line)
 
 		default:
 			fmt.Println("Not a recognized command, might be missing argument, type 'help' for assistance.")
@@ -231,4 +362,3 @@ func main() {
 
 }
 */
-
