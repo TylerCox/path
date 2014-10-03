@@ -147,7 +147,7 @@ func (n Node) Delete_request(key string, reply *bool) error {
 	return errors.New("Key [" + key + "] does not exist")
 }
 
-func delete(command string) {
+func delete_val(command string) {
 	address, remain := get_second_string(command, "delete")
 	skey, _ := get_second_string(remain, address)
 
@@ -305,7 +305,7 @@ func main() {
 		case strings.HasPrefix(line, "get "): //get
 			get(line)
 		case strings.HasPrefix(line,"delete "): //delete
-			delete(line)
+			delete_val(line)
 
 		default:
 			fmt.Println("Not a recognized command, might be missing argument, type 'help' for assistance.")
