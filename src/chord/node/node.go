@@ -50,12 +50,74 @@ func get_second_string(command string, skip string) (string, string) {
 
 //////////////////////////////////////////////////////////////
 //Server only commands////////////////////////////////////////
-func stabilize(node *Node) {
+func hashString(elt string) *big.Int {
+	hasher := sha1.New()
+	hasher.Write([]byte(elt))
+	return new(big.Int).SetBytes(hasher.Sum(nil))
+}
 
+const keySize = sha1.Size * 8
+
+var hashMod = new(big.Int).Exp(big.NewInt(2), big.NewInt(keySize), nil)
+
+func (elt Node) jump(fingerentry int) *big.Int {
+	n := hashString(elt.self_addr)
+	two := big.NewInt(2)
+	fingerentryminus1 := big.NewInt(int64(fingerentry) - 1)
+	jump := new(big.Int).Exp(two, fingerentryminus1, nil)
+	sum := new(big.Int).Add(n, jump)
+
+	return new(big.Int).Mod(sum, hashMod)
+}
+
+func ask_for_pred(addr string) string{
+	
+}
+
+func stabilize(node *Node) {
+	if node.successor_addr != ""{
+
+		client, err := rpc.DialHTTP("tcp",node.successor_addr)
+		if err != nil {
+			log.Println("Stabilize connect:",node.successor_addr,"error:", err)
+		} else {
+			var reply string
+			err := client.Call("Node.Inform_of_predecessor", false, &reply)
+			if err != nil {
+				log.Println("Successor-Inform_of_predecessor error:", err)
+			} else {
+				log.Println("Successor answered Predecessor is:", reply)
+				switch{
+				case reply == "":
+					var reply bool
+					client.Call("Node.Notify_Node",node.self_addr,&reply)
+					log.Println("Told node Predecessor is self")
+				case reply == node.self_addr:
+					log.Println("Node Predecessor is self")
+				default:
+
+				} 
+			}
+			errc := client.Close()
+			if errc != nil {
+				log.Println("Closing rpc error:", errc)
+			}
+		}
+	}
+
+}
+
+func (n Node) Inform_of_predecessor(none bool,reply *string)error{
+	*reply = n.predecessor_addr
+	return nil
 }
 
 func (n Node) Notify_Node(addr string, none *bool) error {
 	n.predecessor_addr = addr
+	if n.successor_addr == ""{
+	//Should only run when ring is new.
+		n.successor_addr = addr
+	}
 	return nil
 }
 
@@ -112,26 +174,6 @@ func getLocalAddress() string {
 	fmt.Println("Finished Getting Local Address\n\n\n")
 
 	return localaddress
-}
-
-func hashString(elt string) *big.Int {
-	hasher := sha1.New()
-	hasher.Write([]byte(elt))
-	return new(big.Int).SetBytes(hasher.Sum(nil))
-}
-
-const keySize = sha1.Size * 8
-
-var hashMod = new(big.Int).Exp(big.NewInt(2), big.NewInt(keySize), nil)
-
-func (elt Node) jump(fingerentry int) *big.Int {
-	n := hashString(elt.self_addr)
-	two := big.NewInt(2)
-	fingerentryminus1 := big.NewInt(int64(fingerentry) - 1)
-	jump := new(big.Int).Exp(two, fingerentryminus1, nil)
-	sum := new(big.Int).Add(n, jump)
-
-	return new(big.Int).Mod(sum, hashMod)
 }
 
 //////////////////////////////////////////////////////////////
@@ -300,6 +342,7 @@ func set_port(node *Node, command string) {
 			if _, err := strconv.Atoi(what); err == nil {
 				node.port = what
 				log.Println("Port set to:", node.port)
+				node.self_addr := getLocalAddress()+":"+what
 				return
 			}
 		}
@@ -307,7 +350,7 @@ func set_port(node *Node, command string) {
 	log.Println("Port remains:", node.port, "(No new port number read)")
 }
 
-func connect_successor(node *Node, command string) {
+func connect_to_ring(node *Node, command string) {
 	address, _ := get_second_string(command, "join")
 	_, err := rpc.DialHTTP("tcp", address)
 	if err != nil {
@@ -334,6 +377,7 @@ func dump(node *Node) {
 	fmt.Println()
 	fmt.Println()
 	log.Println("Listening port:", node.port)
+	log.Println("predecessor_addr:"+node.predecessor_addr)
 	log.Println("Successor_addr:", node.successor_addr)
 	log.Println("Listening:", node.listening)
 	log.Println("Self_addr:", node.self_addr)
@@ -347,7 +391,7 @@ func main() {
 	var line string
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Split(bufio.ScanLines)
-	addr := getLocalAddress()
+	addr := getLocalAddress()+":3410"
 	data := &Data{
 		vals: make(map[string]string),
 	}
@@ -359,6 +403,7 @@ func main() {
 		predecessor_addr: "",
 		listening:        false,
 	}
+	stabilize(node)
 	node.data <- data
 	for scanner.Scan() {
 		line = scanner.Text()
@@ -385,7 +430,7 @@ func main() {
 			}
 		case strings.HasPrefix(line, "join "): //Join
 			if node.listening == false {
-				connect_successor(node, line)
+				connect_to_ring(node, line)
 			} else {
 				log.Println("Already listening on port:", node.port)
 			}
