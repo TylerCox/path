@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/rpc"
 	"os"
 	"strconv"
 	"strings"
-)
+	"math/big"
+	"crypto/sha1"
+	)
 
 type Data struct {
 	vals map[string]string
@@ -22,11 +25,12 @@ type StringPair struct {
 }
 
 type Node struct {
-	port           string
-	data           chan *Data
-	successor      *rpc.Client
-	successor_addr string
-	listening      bool
+	port             string
+	data             chan *Data
+	self_addr        string
+	successor_addr   string
+	predecessor_addr string
+	listening        bool
 }
 
 //Helper functions///////////////////////////////////////////
@@ -46,6 +50,89 @@ func get_second_string(command string, skip string) (string, string) {
 
 //////////////////////////////////////////////////////////////
 //Server only commands////////////////////////////////////////
+func stabilize(node *Node) {
+
+}
+
+func (n Node) Notify_Node(addr string, none *bool) error {
+	n.predecessor_addr = addr
+	return nil
+}
+
+func Notify(self_addr string, client *rpc.Client) {
+	var reply string
+	err := client.Call("Node.Notify_Node", self_addr, &reply)
+	if err != nil {
+		log.Println("Remote Notify Error:", err)
+	}
+}
+
+func getLocalAddress() string {
+	fmt.Println("\n\n\nGetting Local Address\n")
+	var localaddress string
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		panic("init: failed to find network interfaces")
+	}
+
+	// find the first non-loopback interface with an IP address
+	for _, elt := range ifaces {
+		log.Println("!Interface!")
+		addrs, _ := elt.Addrs()
+		log.Println("Index:", elt.Index, "MTU:", elt.MTU, "Name:", elt.Name, "HardwareAddr:", elt.HardwareAddr, "Flags:", elt.Flags, "Addr:", addrs)
+		if elt.Flags&net.FlagLoopback == 0 && elt.Flags&net.FlagUp != 0 {
+
+			addrs, err := elt.Addrs()
+			log.Println("Acctually looking at address", addrs)
+			if err != nil {
+				panic("init: failed to get addresses for network interface")
+			}
+
+			for _, addr := range addrs {
+				log.Println("Auto setting ip to:", addr.String(), "Because if chain doesn't finish.")
+				localaddress = addr.String()
+				log.Println("Looping over addr list, viewing:", addr)
+				ipnet, ok := addr.(*net.IPNet)
+				log.Println("Ipnet:", ipnet)
+				if ok {
+					log.Println("first ok")
+					if ip4 := ipnet.IP.To4(); len(ip4) == net.IPv4len {
+						log.Println("second ok")
+						localaddress = ip4.String()
+						break
+					}
+				}
+			}
+		}
+	}
+	if localaddress == "" {
+		panic("init: failed to find non-loopback interface with valid address on this node")
+	}
+	fmt.Println("Finished Getting Local Address\n\n\n")
+
+	return localaddress
+}
+
+func hashString(elt string) *big.Int {
+	hasher := sha1.New()
+	hasher.Write([]byte(elt))
+	return new(big.Int).SetBytes(hasher.Sum(nil))
+}
+
+const keySize = sha1.Size * 8
+
+var hashMod = new(big.Int).Exp(big.NewInt(2), big.NewInt(keySize), nil)
+
+func (elt Node) jump(fingerentry int) *big.Int {
+	n := hashString(elt.self_addr)
+	two := big.NewInt(2)
+	fingerentryminus1 := big.NewInt(int64(fingerentry) - 1)
+	jump := new(big.Int).Exp(two, fingerentryminus1, nil)
+	sum := new(big.Int).Add(n, jump)
+
+	return new(big.Int).Mod(sum, hashMod)
+}
 
 //////////////////////////////////////////////////////////////
 //Server-Keyboard commands////////////////////////////////////
@@ -139,7 +226,7 @@ func (n Node) Delete_request(key string, reply *bool) error {
 	m := <-n.data
 	if _, ok := m.vals[key]; ok {
 		//log.Println("!!!!",m.vals[key])
-		delete(m.vals,key)
+		delete(m.vals, key)
 		n.data <- m
 		return nil
 	}
@@ -222,13 +309,12 @@ func set_port(node *Node, command string) {
 
 func connect_successor(node *Node, command string) {
 	address, _ := get_second_string(command, "join")
-	client, err := rpc.DialHTTP("tcp", address)
+	_, err := rpc.DialHTTP("tcp", address)
 	if err != nil {
 		log.Println("Ping:", err)
 	} else {
 		log.Println("Joining Ring at:", address)
 		go listen(node)
-		node.successor = client
 		node.successor_addr = address
 	}
 }
@@ -247,7 +333,10 @@ func listen(node *Node) {
 func dump(node *Node) {
 	fmt.Println()
 	fmt.Println()
-	log.Println("Listening port:", node.port, "Successor_addr:", node.successor_addr, "Listening:", node.listening)
+	log.Println("Listening port:", node.port)
+	log.Println("Successor_addr:", node.successor_addr)
+	log.Println("Listening:", node.listening)
+	log.Println("Self_addr:", node.self_addr)
 	log.Println("-Data---------------------------------------")
 	m := <-node.data
 	log.Println(m.vals)
@@ -258,15 +347,17 @@ func main() {
 	var line string
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Split(bufio.ScanLines)
+	addr := getLocalAddress()
 	data := &Data{
 		vals: make(map[string]string),
 	}
 	node := &Node{
-		port:           "3410",
-		data:           make(chan *Data, 1),
-		successor:      nil,
-		successor_addr: "",
-		listening:      false,
+		port:             "3410",
+		data:             make(chan *Data, 1),
+		self_addr:        addr,
+		successor_addr:   "",
+		predecessor_addr: "",
+		listening:        false,
 	}
 	node.data <- data
 	for scanner.Scan() {
@@ -304,7 +395,7 @@ func main() {
 			put(line)
 		case strings.HasPrefix(line, "get "): //get
 			get(line)
-		case strings.HasPrefix(line,"delete "): //delete
+		case strings.HasPrefix(line, "delete "): //delete
 			delete_val(line)
 
 		default:
