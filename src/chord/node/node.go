@@ -317,6 +317,9 @@ func main() {
 
 /*
 
+succ = append(succ, reply.Successors[:size]...) // the ... means that it pulls open the slice and appends the parts of the slice to the new slice.
+
+
 fixfingers(){
 	elt.FingerTable[1] = elt.Successor
 	...
