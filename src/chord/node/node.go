@@ -13,6 +13,7 @@ import (
 	"strings"
 	"math/big"
 	"crypto/sha1"
+	"time"
 	)
 
 type Data struct {
@@ -106,35 +107,37 @@ func ask_for_pred(addr string) (string,*rpc.Client){
 }
 
 func stabilize(node *Node) {
-	if node.successor_addr != ""{
+	for{
+		time.Sleep(time.Second)
+		if node.successor_addr != ""{
 
-		reply, client := ask_for_pred(node.successor_addr)
-		switch{
-			case client == nil:
-				return
-			case reply == "":
-				log.Println("Telling node Predecessor is self")
-				set_node_pred(client,node.self_addr)
-				err := client.Close()
-				if err != nil {
-					log.Println("Closing rpc error:", err)
-				}
-			case reply == node.self_addr:
-				err := client.Close()
-				if err != nil {
-					log.Println("Closing rpc error:", err)
-				}
-			default:
-				err := client.Close()
-				if err != nil {
-					log.Println("Closing rpc error:", err)
-				}
-				log.Println("Address was different") 
+			reply, client := ask_for_pred(node.successor_addr)
+			switch{
+				case client == nil:
+					break
+				case reply == "":
+					log.Println("Telling node Predecessor is self")
+					set_node_pred(client,node.self_addr)
+					err := client.Close()
+					if err != nil {
+						log.Println("Closing rpc error:", err)
+					}
+				case reply == node.self_addr:
+					err := client.Close()
+					if err != nil {
+						log.Println("Closing rpc error:", err)
+					}
+				default:
+					err := client.Close()
+					if err != nil {
+						log.Println("Closing rpc error:", err)
+					}
+					log.Println("Address was different") 
+
+			}
 
 		}
-
 	}
-
 }
 
 func (n Node) Inform_of_predecessor(none bool,reply *string)error{
@@ -433,7 +436,6 @@ func main() {
 		predecessor_addr: "",
 		listening:        false,
 	}
-	stabilize(node)
 	node.data <- data
 	for scanner.Scan() {
 		line = scanner.Text()
@@ -455,12 +457,14 @@ func main() {
 			if node.listening == false {
 				log.Println("Creating New Ring")
 				go listen(node)
+				go stabilize(node)
 			} else {
 				log.Println("Already listening on port:", node.port)
 			}
 		case strings.HasPrefix(line, "join "): //Join
 			if node.listening == false {
 				connect_to_ring(node, line)
+				go stabilize(node)
 			} else {
 				log.Println("Already listening on port:", node.port)
 			}
