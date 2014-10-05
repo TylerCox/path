@@ -118,16 +118,17 @@ func confirm_exists(address string) bool{
 }
 
 func stabilize(node *Node) {
+	const max_failures = 3
 	for {
 		time.Sleep(time.Second)
 		ad := <-node.successor_addr
-		if ad != "" {
+		if ad != "" && ad != node.self_addr{
 
 			reply, client := ask_for_pred(ad)
 			if client == nil {
 				node.successor_contact_fail += 1
-				if node.successor_contact_fail == 3 {
-					ad = ""
+				if node.successor_contact_fail == max_failures {
+					ad = node.self_addr
 				}
 			} else {
 				node.successor_contact_fail = 0
@@ -169,7 +170,7 @@ func stabilize(node *Node) {
 					if err != nil {
 						log.Println("Closing rpc error:", err)
 					}
-					log.Println("Address was different")
+					log.Println("Address was not self")
 
 				}
 			}
@@ -183,19 +184,19 @@ func FindSuccessor(n *Node) { //Part of stabalizing
 	for {
 		time.Sleep(time.Second)
 		add := <-n.successor_addr
-		if add == "" {
-			//Should only run when ring is new.
+		if add == "" || add == n.self_addr {
+			//Should only run when ring is new. Or one left
 			addr := <-n.predecessor_addr
-			if addr != "" {
-				log.Println("Updating Successor from empty to:", addr)
+			if (addr == "" || addr != add) && (add == "" || add == n.self_addr) {
+				log.Println("Updating Successor from empty to Predecessor:", addr)
 				answered := confirm_exists(addr)
 				if answered{
 					add = addr
 				}else{
 					log.Println("Predecessor does not answer")
-					log.Println("!!No other nodes in ring!!")
-					log.Println("Predecessor and Successor empty")
-					addr = ""
+					log.Println("No other nodes in ring")
+					log.Println("Successor is self")
+					addr = n.self_addr
 				}
 			}
 			n.predecessor_addr <- addr
@@ -401,6 +402,77 @@ func delete_val(command string) {
 	}
 }
 
+func(n Node) Give_successor(none bool, addr *string)error{
+	ad := <-n.successor_addr
+	if ping(ad){
+		*addr = ad
+		n.successor_addr <- ad
+		return nil
+	}
+	*addr = ""
+	n.successor_addr <- ad
+	return nil
+}
+
+func keyboard_find(command string,n *Node){
+	value, _ := get_second_string(command, "find")
+	if value != ""{
+		log.Println("Looking for value:",value)
+		ret := Find(value,n)
+		if ret != ""{
+			log.Println("Value lives at:",ret)
+		}else{
+			log.Println("Perhaps try again")
+		}
+	}else{
+		log.Println("Please type in a non-empty value")
+	}
+
+}
+
+func Find(value string,n *Node)string{ //returns an address
+	max_failures := 20
+	hash := hashString(value)
+	start := n.self_addr
+	succ := <- n.successor_addr
+	end := succ
+	n.successor_addr <- succ
+	for{
+		if max_failures < 0{
+			log.Println("Too many failures, ending search for:", value)
+			return ""
+		}
+		if between(hashString(start),hash,hashString(end),true){
+			return end
+		}else{
+			client, err := rpc.DialHTTP("tcp", end)
+			if err != nil {
+				log.Println("Find connect:", err)
+				log.Println("Double checking successor_addr")
+				succ := <- n.successor_addr
+				end = succ
+				n.successor_addr <- succ
+				max_failures--
+			} else {
+				var reply string
+				err := client.Call("Node.Give_successor",true,&reply)
+				if err != nil{
+					log.Println("Find/Query of Successor error:",err)
+					max_failures--
+				}else{
+					if reply != ""{
+						start = end
+						end = reply
+					}else{
+						max_failures--
+					}
+				}
+			}
+		}
+	}
+
+}
+
 func (n Node) Ping_respond(empty bool, reply *bool) error {
 	*reply = true
 	return nil
@@ -564,7 +636,8 @@ func main() {
 			get(line)
 		case strings.HasPrefix(line, "delete "): //delete
 			delete_val(line)
-
+		case strings.HasPrefix(line, "find "):
+			keyboard_find(line,node)
 		default:
 			fmt.Println("Not a recognized command, might be missing argument, type 'help' for assistance.")
 
@@ -572,54 +645,3 @@ func main() {
 
 	}
 }
-
-/*
-
-succ = append(succ, reply.Successors[:size]...) // the ... means that it pulls open the slice and appends the parts of the slice to the new slice.
-
-
-fixfingers(){
-	elt.FingerTable[1] = elt.Successor
-	...
-
-	for elt.NextFinger < keySize &&
-	between(elt.Address.GetHash(),elt.jump(),)
-
-}
-
-
-Notes uint8 and sha1:
-
-package main
-
-import (
-	"bytes"
-	"crypto/sha1"
-	"fmt"
-	"os"
-	"reflect"
-)
-
-func main() {
-	data := []byte("This page intentionally left blank.")
-	sha := sha1.Sum(data)
-	fmt.Printf("% x", sha)
-	fmt.Println()
-	fmt.Println(reflect.TypeOf(sha))
-	fmt.Println(data)
-	fmt.Println()
-
-	something := make([]uint8, 20, 20)
-	for i := range something {
-		something[i] = uint8(255)
-	}
-	fmt.Printf("Something: % x", something)
-	fmt.Println()
-
-	fmt.Println()
-	var b bytes.Buffer // A Buffer needs no initialization.
-	b.Write(data)
-	b.WriteTo(os.Stdout)
-
-}
-*/
