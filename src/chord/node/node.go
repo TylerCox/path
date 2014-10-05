@@ -133,6 +133,14 @@ func stabilize(node *Node) {
 						log.Println("Closing rpc error:", err)
 					}
 				default:
+					bet := between(hashString(node.self_addr),hashString(reply),hashString(ad.successor_addr),false)
+					if bet{
+						log.Println(reply,"is in between")
+						ad.successor_addr = reply
+					}else{
+						log.Println(reply,"is not in between")
+						set_node_pred(client,node.self_addr)
+					}
 					err := client.Close()
 					if err != nil {
 						log.Println("Closing rpc error:", err)
@@ -428,6 +436,7 @@ func dump(node *Node) {
 	log.Println("Successor_addr:", ad.successor_addr)
 	log.Println("Listening:", node.listening)
 	log.Println("Self_addr:", node.self_addr)
+	log.Println("Hash Position:",hashString(node.self_addr))
 	log.Println("-Data---------------------------------------")
 	node.addrs <- ad
 	m := <-node.data
