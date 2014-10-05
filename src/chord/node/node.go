@@ -20,6 +20,11 @@ type Data struct {
 	vals map[string]string
 }
 
+type Address_List struct{
+	successor_addr string
+	predecessor_addr string
+}
+
 type StringPair struct {
 	Key   string
 	Value string
@@ -29,8 +34,7 @@ type Node struct {
 	port             string
 	data             chan *Data
 	self_addr        string
-	successor_addr   string
-	predecessor_addr string
+	addrs 			 chan *Address_List
 	listening        bool
 }
 
@@ -109,14 +113,15 @@ func ask_for_pred(addr string) (string,*rpc.Client){
 func stabilize(node *Node) {
 	for{
 		time.Sleep(time.Second)
-		if node.successor_addr != ""{
+		ad := <- node.addrs
+		if ad.successor_addr != ""{
 
-			reply, client := ask_for_pred(node.successor_addr)
+			reply, client := ask_for_pred(ad.successor_addr)
 			switch{
 				case client == nil:
 					break
 				case reply == "":
-					log.Println("Telling node Predecessor is self")
+					//log.Println("Telling node Predecessor is self")
 					set_node_pred(client,node.self_addr)
 					err := client.Close()
 					if err != nil {
@@ -137,20 +142,27 @@ func stabilize(node *Node) {
 			}
 
 		}
+		node.addrs <- ad
 	}
 }
 
 func (n Node) Inform_of_predecessor(none bool,reply *string)error{
-	*reply = n.predecessor_addr
+	ad := <- n.addrs
+	*reply = ad.predecessor_addr
+	n.addrs<- ad
 	return nil
 }
 
 func (n Node) Notify_Node(addr string, none *bool) error {
-	n.predecessor_addr = addr
-	if n.successor_addr == ""{
+	ad:=<-n.addrs
+	log.Println("Updating Predecessor to:", addr)
+	ad.predecessor_addr = addr
+	if ad.successor_addr == ""{
 	//Should only run when ring is new.
-		n.successor_addr = addr
+		log.Println("Updating Successor from empty to:",addr)
+		ad.successor_addr = addr
 	}
+	n.addrs<-ad
 	return nil
 }
 
@@ -300,7 +312,6 @@ func get(command string) {
 func (n Node) Delete_request(key string, reply *bool) error {
 	m := <-n.data
 	if _, ok := m.vals[key]; ok {
-		//log.Println("!!!!",m.vals[key])
 		delete(m.vals, key)
 		n.data <- m
 		return nil
@@ -391,7 +402,9 @@ func connect_to_ring(node *Node, command string) {
 	} else {
 		log.Println("Joining Ring at:", address)
 		go listen(node)
-		node.successor_addr = address
+		ad :=<-node.addrs
+		ad.successor_addr = address
+		node.addrs <- ad
 	}
 }
 
@@ -407,14 +420,16 @@ func listen(node *Node) {
 }
 
 func dump(node *Node) {
+	ad :=<-node.addrs
 	fmt.Println()
 	fmt.Println()
 	log.Println("Listening port:", node.port)
-	log.Println("predecessor_addr:"+node.predecessor_addr)
-	log.Println("Successor_addr:", node.successor_addr)
+	log.Println("predecessor_addr:", ad.predecessor_addr)
+	log.Println("Successor_addr:", ad.successor_addr)
 	log.Println("Listening:", node.listening)
 	log.Println("Self_addr:", node.self_addr)
 	log.Println("-Data---------------------------------------")
+	node.addrs <- ad
 	m := <-node.data
 	log.Println(m.vals)
 	node.data <- m
@@ -428,15 +443,20 @@ func main() {
 	data := &Data{
 		vals: make(map[string]string),
 	}
+	address := &Address_List{
+		successor_addr:"",
+		predecessor_addr:"",
+	}
 	node := &Node{
 		port:             "3410",
 		data:             make(chan *Data, 1),
 		self_addr:        addr,
-		successor_addr:   "",
-		predecessor_addr: "",
+		addrs:			  make(chan *Address_List,1),
 		listening:        false,
 	}
+	log.Println("location of node memory:",&node)
 	node.data <- data
+	node.addrs <- address
 	for scanner.Scan() {
 		line = scanner.Text()
 		switch {
