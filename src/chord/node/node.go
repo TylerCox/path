@@ -2,27 +2,22 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha1"
 	"errors"
 	"fmt"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
 	"strconv"
 	"strings"
-	"math/big"
-	"crypto/sha1"
 	"time"
-	)
+)
 
 type Data struct {
 	vals map[string]string
-}
-
-type Address_List struct{
-	successor_addr string
-	predecessor_addr string
 }
 
 type StringPair struct {
@@ -31,11 +26,13 @@ type StringPair struct {
 }
 
 type Node struct {
-	port             string
-	data             chan *Data
-	self_addr        string
-	addrs 			 chan *Address_List
-	listening        bool
+	port                   string
+	data                   chan *Data
+	self_addr              string
+	successor_addr         chan string
+	successor_contact_fail int
+	predecessor_addr       chan string
+	listening              bool
 }
 
 //Helper functions///////////////////////////////////////////
@@ -76,53 +73,68 @@ func (elt Node) jump(fingerentry int) *big.Int {
 }
 
 func between(start, elt, end *big.Int, inclusive bool) bool {
-    if end.Cmp(start) > 0 {
-        return (start.Cmp(elt) < 0 && elt.Cmp(end) < 0) || (inclusive && elt.Cmp(end) == 0)
-    } else {
-        return start.Cmp(elt) < 0 || elt.Cmp(end) < 0 || (inclusive && elt.Cmp(end) == 0)
-    }
-    panic("impossible")
+	if end.Cmp(start) > 0 {
+		return (start.Cmp(elt) < 0 && elt.Cmp(end) < 0) || (inclusive && elt.Cmp(end) == 0)
+	} else {
+		return start.Cmp(elt) < 0 || elt.Cmp(end) < 0 || (inclusive && elt.Cmp(end) == 0)
+	}
+	panic("impossible")
 }
 
-func set_node_pred(client *rpc.Client, addr_self string){
+func set_node_pred(client *rpc.Client, addr_self string) {
 	var reply bool
-	err :=client.Call("Node.Notify_Node",addr_self,&reply)
+	err := client.Call("Node.Notify_Node", addr_self, &reply)
 	if err != nil {
 		log.Println("Notify Node Error:", err)
 	}
 }
 
-func ask_for_pred(addr string) (string,*rpc.Client){
-	client,err := rpc.DialHTTP("tcp",addr)
+func ask_for_pred(addr string) (string, *rpc.Client) {
+	client, err := rpc.DialHTTP("tcp", addr)
 	if err != nil {
-		log.Println("Stabilize connect:",addr,"error:", err)
+		log.Println("Stabilize connect error:", err)
 	} else {
 		var reply string
 		err := client.Call("Node.Inform_of_predecessor", false, &reply)
 		if err != nil {
 			log.Println("Successor-Inform_of_predecessor error:", err)
-			return "",client
+			return "", client
 		} else {
-			return reply,client
+			return reply, client
 		}
 	}
-	return "",nil
+	return "", nil
 
 }
 
-func stabilize(node *Node) {
-	for{
-		time.Sleep(time.Second)
-		ad := <- node.addrs
-		if ad.successor_addr != ""{
+func confirm_exists(address string) bool{
+	for i := 0; i < 3; i++ {
+		answered := ping(address)
+		if answered {
+			return true
+		}
+	}
+	return false
+}
 
-			reply, client := ask_for_pred(ad.successor_addr)
-			switch{
-				case client == nil:
-					break
+func stabilize(node *Node) {
+	for {
+		time.Sleep(time.Second)
+		ad := <-node.successor_addr
+		if ad != "" {
+
+			reply, client := ask_for_pred(ad)
+			if client == nil {
+				node.successor_contact_fail += 1
+				if node.successor_contact_fail == 3 {
+					ad = ""
+				}
+			} else {
+				node.successor_contact_fail = 0
+				switch {
 				case reply == "":
 					//log.Println("Telling node Predecessor is self")
-					set_node_pred(client,node.self_addr)
+					set_node_pred(client, node.self_addr)
 					err := client.Close()
 					if err != nil {
 						log.Println("Closing rpc error:", err)
@@ -133,44 +145,77 @@ func stabilize(node *Node) {
 						log.Println("Closing rpc error:", err)
 					}
 				default:
-					bet := between(hashString(node.self_addr),hashString(reply),hashString(ad.successor_addr),false)
-					if bet{
-						log.Println(reply,"is in between")
-						ad.successor_addr = reply
-					}else{
-						log.Println(reply,"is not in between")
-						set_node_pred(client,node.self_addr)
+					bet := between(hashString(node.self_addr), hashString(reply), hashString(ad), false)
+					if bet {
+						log.Println(reply, "is in between")
+						log.Println()
+						log.Println("Attepmting to contact said predesessor")
+						answered:=confirm_exists(reply)
+						if answered {
+							log.Println("Contact Sucessful")
+							ad = reply
+						} else {
+							//No responce from told predesessor
+							//Tell node self is preddesossor
+							log.Println(reply, "did not respond")
+							log.Println("Telling node self is predesessor")
+							set_node_pred(client, node.self_addr)
+						}
+					} else {
+						log.Println(reply, "is not in between")
+						set_node_pred(client, node.self_addr)
 					}
 					err := client.Close()
 					if err != nil {
 						log.Println("Closing rpc error:", err)
 					}
-					log.Println("Address was different") 
+					log.Println("Address was different")
 
+				}
 			}
 
 		}
-		node.addrs <- ad
+		node.successor_addr <- ad
 	}
 }
 
-func (n Node) Inform_of_predecessor(none bool,reply *string)error{
-	ad := <- n.addrs
-	*reply = ad.predecessor_addr
-	n.addrs<- ad
+func FindSuccessor(n *Node) { //Part of stabalizing
+	for {
+		time.Sleep(time.Second)
+		add := <-n.successor_addr
+		if add == "" {
+			//Should only run when ring is new.
+			addr := <-n.predecessor_addr
+			if addr != "" {
+				log.Println("Updating Successor from empty to:", addr)
+				answered := confirm_exists(addr)
+				if answered{
+					add = addr
+				}else{
+					log.Println("Predecessor does not answer")
+					log.Println("!!No other nodes in ring!!")
+					log.Println("Predecessor and Successor empty")
+					addr = ""
+				}
+			}
+			n.predecessor_addr <- addr
+		}
+		n.successor_addr <- add
+	}
+}
+
+func (n Node) Inform_of_predecessor(none bool, reply *string) error {
+	ad := <-n.predecessor_addr
+	*reply = ad
+	n.predecessor_addr <- ad
 	return nil
 }
 
 func (n Node) Notify_Node(addr string, none *bool) error {
-	ad:=<-n.addrs
+	ad := <-n.predecessor_addr
 	log.Println("Updating Predecessor to:", addr)
-	ad.predecessor_addr = addr
-	if ad.successor_addr == ""{
-	//Should only run when ring is new.
-		log.Println("Updating Successor from empty to:",addr)
-		ad.successor_addr = addr
-	}
-	n.addrs<-ad
+	ad = addr
+	n.predecessor_addr <- ad
 	return nil
 }
 
@@ -361,25 +406,31 @@ func (n Node) Ping_respond(empty bool, reply *bool) error {
 	return nil
 }
 
-func ping(command string) {
-	address, _ := get_second_string(command, "ping")
-	if address != "" {
-		client, err := rpc.DialHTTP("tcp", address)
+func ping(address string) bool {
+	client, err := rpc.DialHTTP("tcp", address)
+	if err != nil {
+		log.Println("Ping:", err)
+	} else {
+		reply := false
+		err := client.Call("Node.Ping_respond", true, &reply)
 		if err != nil {
-			log.Println("Ping:", err)
+			log.Println("Remote Ping Error:", err)
 		} else {
-			reply := false
-			err := client.Call("Node.Ping_respond", true, &reply)
-			if err != nil {
-				log.Println("Remote Ping Error:", err)
-			} else {
-				log.Println("Ping Responce:", reply)
-			}
+			log.Println("Ping Responce:", reply)
 			errc := client.Close()
 			if errc != nil {
 				log.Println("Closeing rpc error:", errc)
 			}
+			return true
 		}
+	}
+	return false
+}
+
+func ping_command(command string) {
+	address, _ := get_second_string(command, "ping")
+	if address != "" {
+		_ = ping(address)
 	} else {
 		log.Println("Please enter an address <#.#.#.#:port#>")
 	}
@@ -394,7 +445,7 @@ func set_port(node *Node, command string) {
 			if _, err := strconv.Atoi(what); err == nil {
 				node.port = what
 				log.Println("Port set to:", node.port)
-				node.self_addr = getLocalAddress()+":"+what
+				node.self_addr = getLocalAddress() + ":" + what
 				return
 			}
 		}
@@ -404,15 +455,20 @@ func set_port(node *Node, command string) {
 
 func connect_to_ring(node *Node, command string) {
 	address, _ := get_second_string(command, "join")
+	address = strings.ToLower(address)
+	if strings.HasPrefix(address,"localhost") || strings.HasPrefix(address,"127.0.0.1"){
+		i := strings.Index(address,":")
+		address = getLocalAddress()+address[i:]
+	}
 	_, err := rpc.DialHTTP("tcp", address)
 	if err != nil {
 		log.Println("Ping:", err)
 	} else {
 		log.Println("Joining Ring at:", address)
 		go listen(node)
-		ad :=<-node.addrs
-		ad.successor_addr = address
-		node.addrs <- ad
+		ad := <-node.successor_addr
+		ad = address
+		node.successor_addr <- ad
 	}
 }
 
@@ -428,17 +484,19 @@ func listen(node *Node) {
 }
 
 func dump(node *Node) {
-	ad :=<-node.addrs
+	ads := <-node.successor_addr
+	adp := <-node.predecessor_addr
 	fmt.Println()
 	fmt.Println()
 	log.Println("Listening port:", node.port)
-	log.Println("predecessor_addr:", ad.predecessor_addr)
-	log.Println("Successor_addr:", ad.successor_addr)
+	log.Println("predecessor_addr:", adp)
+	log.Println("Successor_addr:", ads)
 	log.Println("Listening:", node.listening)
 	log.Println("Self_addr:", node.self_addr)
-	log.Println("Hash Position:",hashString(node.self_addr))
+	log.Println("Hash Position:", hashString(node.self_addr))
+	node.successor_addr <- ads
+	node.predecessor_addr <- adp
 	log.Println("-Data---------------------------------------")
-	node.addrs <- ad
 	m := <-node.data
 	log.Println(m.vals)
 	node.data <- m
@@ -448,24 +506,23 @@ func main() {
 	var line string
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Split(bufio.ScanLines)
-	addr := getLocalAddress()+":3410"
+	addr := getLocalAddress() + ":3410"
 	data := &Data{
 		vals: make(map[string]string),
 	}
-	address := &Address_List{
-		successor_addr:"",
-		predecessor_addr:"",
-	}
 	node := &Node{
-		port:             "3410",
-		data:             make(chan *Data, 1),
-		self_addr:        addr,
-		addrs:			  make(chan *Address_List,1),
-		listening:        false,
+		port:                   "3410",
+		data:                   make(chan *Data, 1),
+		self_addr:              addr,
+		successor_addr:         make(chan string, 1),
+		successor_contact_fail: 0,
+		predecessor_addr:       make(chan string, 1),
+		listening:              false,
 	}
-	log.Println("location of node memory:",&node)
+	log.Println("location of node memory:", &node)
 	node.data <- data
-	node.addrs <- address
+	node.successor_addr <- ""
+	node.predecessor_addr <- ""
 	for scanner.Scan() {
 		line = scanner.Text()
 		switch {
@@ -487,6 +544,7 @@ func main() {
 				log.Println("Creating New Ring")
 				go listen(node)
 				go stabilize(node)
+				go FindSuccessor(node) //Ocassionally checks if successor is empty and replaces with an adress it knows is closest.
 			} else {
 				log.Println("Already listening on port:", node.port)
 			}
@@ -494,11 +552,12 @@ func main() {
 			if node.listening == false {
 				connect_to_ring(node, line)
 				go stabilize(node)
+				go FindSuccessor(node) //Ocassionally checks if successor is empty and replaces with an adress it knows is closest.
 			} else {
 				log.Println("Already listening on port:", node.port)
 			}
 		case strings.HasPrefix(line, "ping "): //Ping
-			ping(line)
+			ping_command(line)
 		case strings.HasPrefix(line, "put "): //put
 			put(line)
 		case strings.HasPrefix(line, "get "): //get
