@@ -70,39 +70,69 @@ func (elt Node) jump(fingerentry int) *big.Int {
 	return new(big.Int).Mod(sum, hashMod)
 }
 
-func ask_for_pred(addr string) string{
-	
+func between(start, elt, end *big.Int, inclusive bool) bool {
+    if end.Cmp(start) > 0 {
+        return (start.Cmp(elt) < 0 && elt.Cmp(end) < 0) || (inclusive && elt.Cmp(end) == 0)
+    } else {
+        return start.Cmp(elt) < 0 || elt.Cmp(end) < 0 || (inclusive && elt.Cmp(end) == 0)
+    }
+    panic("impossible")
+}
+
+func set_node_pred(client *rpc.Client, addr_self string){
+	var reply bool
+	err :=client.Call("Node.Notify_Node",addr_self,&reply)
+	if err != nil {
+		log.Println("Notify Node Error:", err)
+	}
+}
+
+func ask_for_pred(addr string) (string,*rpc.Client){
+	client,err := rpc.DialHTTP("tcp",addr)
+	if err != nil {
+		log.Println("Stabilize connect:",addr,"error:", err)
+	} else {
+		var reply string
+		err := client.Call("Node.Inform_of_predecessor", false, &reply)
+		if err != nil {
+			log.Println("Successor-Inform_of_predecessor error:", err)
+			return "",client
+		} else {
+			return reply,client
+		}
+	}
+	return "",nil
+
 }
 
 func stabilize(node *Node) {
 	if node.successor_addr != ""{
 
-		client, err := rpc.DialHTTP("tcp",node.successor_addr)
-		if err != nil {
-			log.Println("Stabilize connect:",node.successor_addr,"error:", err)
-		} else {
-			var reply string
-			err := client.Call("Node.Inform_of_predecessor", false, &reply)
-			if err != nil {
-				log.Println("Successor-Inform_of_predecessor error:", err)
-			} else {
-				log.Println("Successor answered Predecessor is:", reply)
-				switch{
-				case reply == "":
-					var reply bool
-					client.Call("Node.Notify_Node",node.self_addr,&reply)
-					log.Println("Told node Predecessor is self")
-				case reply == node.self_addr:
-					log.Println("Node Predecessor is self")
-				default:
+		reply, client := ask_for_pred(node.successor_addr)
+		switch{
+			case client == nil:
+				return
+			case reply == "":
+				log.Println("Telling node Predecessor is self")
+				set_node_pred(client,node.self_addr)
+				err := client.Close()
+				if err != nil {
+					log.Println("Closing rpc error:", err)
+				}
+			case reply == node.self_addr:
+				err := client.Close()
+				if err != nil {
+					log.Println("Closing rpc error:", err)
+				}
+			default:
+				err := client.Close()
+				if err != nil {
+					log.Println("Closing rpc error:", err)
+				}
+				log.Println("Address was different") 
 
-				} 
-			}
-			errc := client.Close()
-			if errc != nil {
-				log.Println("Closing rpc error:", errc)
-			}
 		}
+
 	}
 
 }
@@ -342,7 +372,7 @@ func set_port(node *Node, command string) {
 			if _, err := strconv.Atoi(what); err == nil {
 				node.port = what
 				log.Println("Port set to:", node.port)
-				node.self_addr := getLocalAddress()+":"+what
+				node.self_addr = getLocalAddress()+":"+what
 				return
 			}
 		}
