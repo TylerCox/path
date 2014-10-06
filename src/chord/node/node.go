@@ -32,6 +32,7 @@ type Node struct {
 	successor_addr         chan string
 	successor_contact_fail int
 	predecessor_addr       chan string
+	fingers 			   []string
 	listening              bool
 }
 
@@ -85,6 +86,12 @@ func between(start, elt, end *big.Int, inclusive bool) bool {
 	panic("impossible")
 }
 
+func fix_fingers(n *Node){ //Repeating Proccess
+	for {
+		time.Sleep(time.Second)
+	}
+}
+
 func set_node_pred(client *rpc.Client, addr_self string) {
 	var reply bool
 	err := client.Call("Node.Notify_Node", addr_self, &reply)
@@ -121,7 +128,7 @@ func confirm_exists(address string) bool{
 	return false
 }
 
-func stabilize(node *Node) {
+func stabilize(node *Node) { //Repeating Proccess
 	const max_failures = 3
 	for {
 		time.Sleep(time.Second)
@@ -187,7 +194,7 @@ func stabilize(node *Node) {
 	}
 }
 
-func FindSuccessor(n *Node) { //Part of stabalizing
+func FindSuccessor(n *Node) { //Repeating Proccess
 	for {
 		time.Sleep(time.Second)
 		add := <-n.successor_addr
@@ -308,7 +315,7 @@ func put(command string,n *Node) { //Assuming that the string is correct length 
 		Value: svalue,
 	}
 
-	address:=Find(skey,n)
+	address:=Find(skey,nil,n)
 
 	if address != "" {
 		client, err := rpc.DialHTTP("tcp", address)
@@ -347,7 +354,7 @@ func (n Node) Get_respond(key string, reply *string) error {
 func get(command string,n *Node) {
 	skey, _ := get_second_string(command, "get")
 
-	address:=Find(skey,n)
+	address:=Find(skey,nil,n)
 
 	if address != "" {
 		client, err := rpc.DialHTTP("tcp", address)
@@ -388,7 +395,7 @@ func (n Node) Delete_request(key string, reply *bool) error {
 func delete_val(command string,n *Node) {
 	skey, _ := get_second_string(command, "delete")
 
-	address:=Find(skey,n)
+	address:=Find(skey,nil,n)
 
 	if address != "" {
 		client, err := rpc.DialHTTP("tcp", address)
@@ -430,7 +437,7 @@ func keyboard_find(command string,n *Node){
 	value, _ := get_second_string(command, "find")
 	if value != ""{
 		log.Println("Looking for value:",value)
-		ret := Find(value,n)
+		ret := Find(value,nil,n)
 		if ret != ""{
 			log.Println("Value lives at:",ret)
 		}else{
@@ -442,9 +449,14 @@ func keyboard_find(command string,n *Node){
 
 }
 
-func Find(value string,n *Node)string{ //returns an address
+func Find(value string,alt *big.Int,n *Node)string{ //returns an address
 	max_failures := 20
-	hash := hashString(value)
+	var hash *big.Int
+	if alt == nil{
+		hash = hashString(value)
+	} else{
+		hash = alt
+	}
 	start := n.self_addr
 	succ := <- n.successor_addr
 	end := succ
@@ -601,6 +613,7 @@ func main() {
 		successor_addr:         make(chan string, 1),
 		successor_contact_fail: 0,
 		predecessor_addr:       make(chan string, 1),
+		fingers:				make([]string,160),
 		listening:              false,
 	}
 	log.Println("location of node memory:", &node)
