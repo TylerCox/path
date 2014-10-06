@@ -40,11 +40,15 @@ func get_second_string(command string, skip string) (string, string) {
 	parts := strings.Split(command, " ")
 	ret := ""
 	remain := command //Whatever the sentence is after first skip word is removed
+	repeated := false
 	for key, what := range parts {
-		if what != "" && what != skip {
+		if what != "" && (what != skip || repeated) {
 			ret = what
 			remain = strings.Join(parts[key:], " ")
 			break
+		}
+		if what == skip{
+			repeated = true
 		}
 	}
 	return ret, remain
@@ -155,22 +159,25 @@ func stabilize(node *Node) {
 						if answered {
 							log.Println("Contact Sucessful")
 							ad = reply
+							log.Println("Waiting to ask new node for Predecessor")
 						} else {
 							//No responce from told predesessor
 							//Tell node self is preddesossor
 							log.Println(reply, "did not respond")
-							log.Println("Telling node self is predesessor")
+							log.Println("Node's Predesessor is missing")
 							set_node_pred(client, node.self_addr)
+							log.Println("Set Node's Predecessor to self")
 						}
 					} else {
 						log.Println(reply, "is not in between")
 						set_node_pred(client, node.self_addr)
+						log.Println("Set Node's Predecessor to self")
 					}
 					err := client.Close()
 					if err != nil {
 						log.Println("Closing rpc error:", err)
 					}
-					log.Println("Address was not self")
+					
 
 				}
 			}
@@ -214,7 +221,7 @@ func (n Node) Inform_of_predecessor(none bool, reply *string) error {
 
 func (n Node) Notify_Node(addr string, none *bool) error {
 	ad := <-n.predecessor_addr
-	log.Println("Updating Predecessor to:", addr)
+	log.Println("Updating self Predecessor to:", addr)
 	ad = addr
 	n.predecessor_addr <- ad
 	return nil
@@ -287,19 +294,21 @@ func (n Node) Put_reciever(pair StringPair, existed *bool) error {
 		*existed = false
 		m.vals[pair.Key] = pair.Value
 	}
+	log.Println("New Key:",pair.Key,"=>",pair.Value)
 	n.data <- m
 	return nil
 }
 
-func put(command string) { //Assuming that the string is correct length currently
-	address, remain := get_second_string(command, "put")
-	skey, remain2 := get_second_string(remain, address)
-	svalue, _ := get_second_string(remain2, skey)
+func put(command string,n *Node) { //Assuming that the string is correct length currently
+	skey, remain := get_second_string(command, "put")
+	svalue, _ := get_second_string(remain, skey)
 
 	pair := &StringPair{
 		Key:   skey,
 		Value: svalue,
 	}
+
+	address:=Find(skey,n)
 
 	if address != "" {
 		client, err := rpc.DialHTTP("tcp", address)
@@ -319,7 +328,7 @@ func put(command string) { //Assuming that the string is correct length currentl
 			}
 		}
 	} else {
-		log.Println("Put format: put <#.#.#.#:port#> <key> <value>")
+		log.Println("Put format: put <key> <value>")
 	}
 }
 
@@ -335,9 +344,10 @@ func (n Node) Get_respond(key string, reply *string) error {
 
 }
 
-func get(command string) {
-	address, remain := get_second_string(command, "get")
-	skey, _ := get_second_string(remain, address)
+func get(command string,n *Node) {
+	skey, _ := get_second_string(command, "get")
+
+	address:=Find(skey,n)
 
 	if address != "" {
 		client, err := rpc.DialHTTP("tcp", address)
@@ -368,15 +378,17 @@ func (n Node) Delete_request(key string, reply *bool) error {
 	if _, ok := m.vals[key]; ok {
 		delete(m.vals, key)
 		n.data <- m
+		log.Println("Deleted key:",key)
 		return nil
 	}
 	n.data <- m
 	return errors.New("Key [" + key + "] does not exist")
 }
 
-func delete_val(command string) {
-	address, remain := get_second_string(command, "delete")
-	skey, _ := get_second_string(remain, address)
+func delete_val(command string,n *Node) {
+	skey, _ := get_second_string(command, "delete")
+
+	address:=Find(skey,n)
 
 	if address != "" {
 		client, err := rpc.DialHTTP("tcp", address)
@@ -631,11 +643,11 @@ func main() {
 		case strings.HasPrefix(line, "ping "): //Ping
 			ping_command(line)
 		case strings.HasPrefix(line, "put "): //put
-			put(line)
+			put(line,node)
 		case strings.HasPrefix(line, "get "): //get
-			get(line)
+			get(line,node)
 		case strings.HasPrefix(line, "delete "): //delete
-			delete_val(line)
+			delete_val(line,node)
 		case strings.HasPrefix(line, "find "):
 			keyboard_find(line,node)
 		default:
