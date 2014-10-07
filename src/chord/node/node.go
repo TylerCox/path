@@ -95,7 +95,7 @@ func fix_fingers(n *Node){ //Repeating Proccess
 		//log.Println("Assigning first finger")
 		n.fingers[1] = ad
 		n.successor_addr<-ad
-		if n.fingers[1] != ""{
+		if n.fingers[1] != "" && n.fingers[1] != n.self_addr{
 			for i:=2; i<=160;i++{
 				hash := n.jump(i)
 				if between(start,hash,hashString(n.fingers[i-1]),true){
@@ -622,7 +622,16 @@ func dump(node *Node) {
 	node.successor_addr <- ads
 	node.predecessor_addr <- adp
 	log.Println("-Fingers-------------------------------------")
-	//log.Println(node.fingers)
+	start := node.fingers[1]
+	log.Println("Finger start index: 1 Address:",node.fingers[1])
+	log.Println("Hash Position:", hashString(node.fingers[1]))
+	for key,value := range node.fingers{
+		if start != value && key != 0{
+			log.Println("Finger start index:",key," Address:",value)
+			log.Println("Hash Position:", hashString(value))
+			start = value
+		}
+	}
 	log.Println("-Data---------------------------------------")
 	m := <-node.data
 	log.Println(m.vals)
@@ -673,7 +682,7 @@ func main() {
 				go listen(node)
 				go stabilize(node)
 				go FixSuccessor(node) //Ocassionally checks if successor is empty and replaces with an adress it knows is closest.
-				//go fix_fingers(node)
+				go fix_fingers(node)
 			} else {
 				log.Println("Already listening on port:", node.port)
 			}
@@ -682,7 +691,7 @@ func main() {
 				connect_to_ring(node, line)
 				go stabilize(node)
 				go FixSuccessor(node) //Ocassionally checks if successor is empty and replaces with an adress it knows is closest.
-				//go fix_fingers(node)
+				go fix_fingers(node)
 			} else {
 				log.Println("Already listening on port:", node.port)
 			}
