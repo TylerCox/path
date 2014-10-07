@@ -151,8 +151,11 @@ func confirm_exists(address string) bool{
 
 func stabilize(node *Node) { //Repeating Proccess
 	const max_failures = 3
+	stable:=false
 	for {
-		time.Sleep(time.Second)
+		if stable {
+			time.Sleep(time.Second)
+		}
 		ad := <-node.successor_addr
 		if ad != "" && ad != node.self_addr{
 
@@ -161,22 +164,19 @@ func stabilize(node *Node) { //Repeating Proccess
 				node.successor_contact_fail += 1
 				if node.successor_contact_fail == max_failures {
 					ad = node.self_addr
+					stable = true
 				}
 			} else {
 				node.successor_contact_fail = 0
 				switch {
-				case reply == "":
+				case reply == "" || reply == ad: //Nothing or Node's self.
 					//log.Println("Telling node Predecessor is self")
 					set_node_pred(client, node.self_addr)
-					err := client.Close()
-					if err != nil {
-						log.Println("Closing rpc error:", err)
-					}
+					stable = true
+					
 				case reply == node.self_addr:
-					err := client.Close()
-					if err != nil {
-						log.Println("Closing rpc error:", err)
-					}
+					stable = true
+
 				default:
 					bet := between(hashString(node.self_addr), hashString(reply), hashString(ad), false)
 					if bet {
@@ -187,7 +187,8 @@ func stabilize(node *Node) { //Repeating Proccess
 						if answered {
 							log.Println("Contact Sucessful")
 							ad = reply
-							log.Println("Waiting to ask new node for Predecessor")
+							stable = false //Not sure if new node is actually the successor
+							log.Println("About to ask new node for Predecessor")
 						} else {
 							//No responce from told predesessor
 							//Tell node self is preddesossor
@@ -195,18 +196,18 @@ func stabilize(node *Node) { //Repeating Proccess
 							log.Println("Node's Predesessor is missing")
 							set_node_pred(client, node.self_addr)
 							log.Println("Set Node's Predecessor to self")
+							stable = true
 						}
 					} else {
 						log.Println(reply, "is not in between")
 						set_node_pred(client, node.self_addr)
 						log.Println("Set Node's Predecessor to self")
+						stable = true
 					}
-					err := client.Close()
-					if err != nil {
-						log.Println("Closing rpc error:", err)
-					}
-					
-
+				}
+				err := client.Close()
+				if err != nil {
+					log.Println("Closing rpc error:", err)
 				}
 			}
 
@@ -601,6 +602,12 @@ func listen(node *Node) {
 	}
 }
 
+func print_hash(command string){
+	value, _ := get_second_string(command, "hash")
+	log.Println("Hashing value:",value)
+	log.Println("Hash Position:", hashString(value))
+}
+
 func dump(node *Node) {
 	ads := <-node.successor_addr
 	adp := <-node.predecessor_addr
@@ -615,7 +622,7 @@ func dump(node *Node) {
 	node.successor_addr <- ads
 	node.predecessor_addr <- adp
 	log.Println("-Fingers-------------------------------------")
-	log.Println(node.fingers)
+	//log.Println(node.fingers)
 	log.Println("-Data---------------------------------------")
 	m := <-node.data
 	log.Println(m.vals)
@@ -666,7 +673,7 @@ func main() {
 				go listen(node)
 				go stabilize(node)
 				go FixSuccessor(node) //Ocassionally checks if successor is empty and replaces with an adress it knows is closest.
-				go fix_fingers(node)
+				//go fix_fingers(node)
 			} else {
 				log.Println("Already listening on port:", node.port)
 			}
@@ -675,7 +682,7 @@ func main() {
 				connect_to_ring(node, line)
 				go stabilize(node)
 				go FixSuccessor(node) //Ocassionally checks if successor is empty and replaces with an adress it knows is closest.
-				go fix_fingers(node)
+				//go fix_fingers(node)
 			} else {
 				log.Println("Already listening on port:", node.port)
 			}
@@ -689,6 +696,8 @@ func main() {
 			delete_val(line,node)
 		case strings.HasPrefix(line, "find "):
 			keyboard_find(line,node)
+		case strings.HasPrefix(line, "hash "):
+			print_hash(line)
 		default:
 			fmt.Println("Not a recognized command, might be missing argument, type 'help' for assistance.")
 
