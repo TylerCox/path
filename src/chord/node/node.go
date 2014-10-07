@@ -89,6 +89,27 @@ func between(start, elt, end *big.Int, inclusive bool) bool {
 func fix_fingers(n *Node){ //Repeating Proccess
 	for {
 		time.Sleep(time.Second)
+		//log.Println("Fixing fingers")
+		start := hashString(n.self_addr)
+		ad :=<-n.successor_addr
+		//log.Println("Assigning first finger")
+		n.fingers[1] = ad
+		n.successor_addr<-ad
+		if n.fingers[1] != ""{
+			for i:=2; i<=160;i++{
+				hash := n.jump(i)
+				if between(start,hash,hashString(n.fingers[i-1]),true){
+					//Next finger still between previous address
+					//log.Println("Assigning",i,"finger")
+					n.fingers[i] = n.fingers[i-1]
+				}else{
+					next:=Find("",hash,n)
+					start = hashString(next)
+					//log.Println("Assigning",i,"finger")
+					n.fingers[i] = next
+				}
+			}
+		}
 	}
 }
 
@@ -194,7 +215,7 @@ func stabilize(node *Node) { //Repeating Proccess
 	}
 }
 
-func FindSuccessor(n *Node) { //Repeating Proccess
+func FixSuccessor(n *Node) { //Repeating Proccess
 	for {
 		time.Sleep(time.Second)
 		add := <-n.successor_addr
@@ -512,7 +533,7 @@ func ping(address string) bool {
 		if err != nil {
 			log.Println("Remote Ping Error:", err)
 		} else {
-			log.Println("Ping Responce:", reply)
+			
 			errc := client.Close()
 			if errc != nil {
 				log.Println("Closeing rpc error:", errc)
@@ -526,7 +547,8 @@ func ping(address string) bool {
 func ping_command(command string) {
 	address, _ := get_second_string(command, "ping")
 	if address != "" {
-		_ = ping(address)
+		reply := ping(address)
+		log.Println("Ping Responce:", reply)
 	} else {
 		log.Println("Please enter an address <#.#.#.#:port#>")
 	}
@@ -592,6 +614,8 @@ func dump(node *Node) {
 	log.Println("Hash Position:", hashString(node.self_addr))
 	node.successor_addr <- ads
 	node.predecessor_addr <- adp
+	log.Println("-Fingers-------------------------------------")
+	log.Println(node.fingers)
 	log.Println("-Data---------------------------------------")
 	m := <-node.data
 	log.Println(m.vals)
@@ -613,7 +637,7 @@ func main() {
 		successor_addr:         make(chan string, 1),
 		successor_contact_fail: 0,
 		predecessor_addr:       make(chan string, 1),
-		fingers:				make([]string,160),
+		fingers:				make([]string,161,161),
 		listening:              false,
 	}
 	log.Println("location of node memory:", &node)
@@ -641,7 +665,8 @@ func main() {
 				log.Println("Creating New Ring")
 				go listen(node)
 				go stabilize(node)
-				go FindSuccessor(node) //Ocassionally checks if successor is empty and replaces with an adress it knows is closest.
+				go FixSuccessor(node) //Ocassionally checks if successor is empty and replaces with an adress it knows is closest.
+				go fix_fingers(node)
 			} else {
 				log.Println("Already listening on port:", node.port)
 			}
@@ -649,7 +674,8 @@ func main() {
 			if node.listening == false {
 				connect_to_ring(node, line)
 				go stabilize(node)
-				go FindSuccessor(node) //Ocassionally checks if successor is empty and replaces with an adress it knows is closest.
+				go FixSuccessor(node) //Ocassionally checks if successor is empty and replaces with an adress it knows is closest.
+				go fix_fingers(node)
 			} else {
 				log.Println("Already listening on port:", node.port)
 			}
