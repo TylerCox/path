@@ -88,6 +88,7 @@ func between(start, elt, end *big.Int, inclusive bool) bool {
 
 func fix_fingers(n *Node){ //Repeating Proccess
 	for {
+		//!!!!! Should only use find once a second and fill the address in as many index's as possible.!!!
 		time.Sleep(time.Second)
 		//log.Println("Fixing fingers")
 		start := hashString(n.self_addr)
@@ -150,6 +151,7 @@ func confirm_exists(address string) bool{
 }
 
 func stabilize(node *Node) { //Repeating Proccess
+	//get rid of max failures and stable.
 	const max_failures = 3
 	stable:=false
 	for {
@@ -163,10 +165,12 @@ func stabilize(node *Node) { //Repeating Proccess
 			if client == nil {
 				node.successor_contact_fail += 1
 				if node.successor_contact_fail == max_failures {
+					//No responce from successor
 					ad = node.self_addr
 					stable = true
 				}
 			} else {
+				//Successor has responded
 				node.successor_contact_fail = 0
 				switch {
 				case reply == "" || reply == ad: //Nothing or Node's self.
@@ -185,9 +189,11 @@ func stabilize(node *Node) { //Repeating Proccess
 						log.Println("Attepmting to contact said predesessor")
 						answered:=confirm_exists(reply)
 						if answered {
+							//Setting nodes predesessor to self's successor
 							log.Println("Contact Sucessful")
 							ad = reply
-							stable = false //Not sure if new node is actually the successor
+							//Not sure if new node is actually the successor, not stable
+							stable = false 
 							log.Println("About to ask new node for Predecessor")
 						} else {
 							//No responce from told predesessor
@@ -573,6 +579,7 @@ func set_port(node *Node, command string) {
 }
 
 func connect_to_ring(node *Node, command string) {
+	//should use find to find the correct successor node
 	address, _ := get_second_string(command, "join")
 	address = strings.ToLower(address)
 	if strings.HasPrefix(address,"localhost") || strings.HasPrefix(address,"127.0.0.1"){
