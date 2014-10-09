@@ -422,7 +422,7 @@ func keyboard_find(command string,n *Node){
 		log.Println("Looking for value:",skey)
 		ret:=Find_ez(skey,nil,false,n)
 		if ret != ""{
-			log.Println("Value lives at:",ret)
+			log.Println("Value belongs to:",ret)
 		}else{
 			log.Println("Perhaps try again")
 		}
@@ -448,39 +448,39 @@ func (n Node) closest_preceding_node(val *big.Int)string{
 func (n Node) Find(val Search,reply *string)error{
 	var hash *big.Int
 	if val.Alt == nil{
-		log.Println("Searching for successor of string:",val.Value)
+		//log.Println("Searching for successor of string:",val.Value)
 		hash = hashString(val.Value)
 	} else{
-		log.Println("Searchign for successor of hash:",val.Alt)
+		//log.Println("Searchign for successor of hash:",val.Alt)
 		hash = val.Alt
 	}
 	ad := <- n.successor_addr
 	add:= ad //Making a copy and repacking
-	log.Println("Between",n.self_addr,"and",add)
 	n.successor_addr <- ad
+	//log.Println("Between",n.self_addr,"and",add)
 	if between(hashString(n.self_addr),hash,hashString(add),val.Equals){
-		log.Println("It is between")
+		//log.Println("It is between")
 		*reply = add
+		//log.Println("Returning address:",*reply )
 	}else{
 		closest := n.closest_preceding_node(hash)
-		log.Println("Not between, sending it to:",closest)
+		//log.Println("Not between, sending it to:",closest)
 		client := open_client(closest)
 		if client == nil{
 			log.Println("Find Error node",closest,"didn't respond")
 			*reply = ""
 		}else{
 			var rep string
-			log.Println("Waiting for Reply")
-			err := client.Call("Node.Find",val,&reply)
+			//log.Println("Waiting for Reply")
+			err := client.Call("Node.Find",val,&rep)
 			if err != nil{
 				log.Println("Passing allong find, Error:",err)
 			}
-			log.Println("Reply is:",rep)
+			//log.Println("Reply is:",rep)
 			*reply = rep
 			close_client(client)
 		}
 	}
-	
 	return nil
 }
 
@@ -492,7 +492,7 @@ func Find_ez(svalue string,salt *big.Int,equ bool,n *Node)string{ //returns an a
 		Alt: salt,
 		Equals: equ,
 	}
-	log.Println("Find is searching",src)
+	//log.Println("Find is searching",src)
 	n.Find(src,&address)
 	return address
 }
@@ -672,7 +672,7 @@ func main() {
 				go listen(node)
 				go stabilize(node)
 				go check_predecessor(node) //Ocassionally checks if successor is empty and replaces with an adress it knows is closest.
-				//go fix_fingers(node)
+				go fix_fingers(node)
 			} else {
 				log.Println("Already listening on port:", node.port)
 			}
@@ -683,7 +683,7 @@ func main() {
 					go listen(node)
 					go stabilize(node)
 					go check_predecessor(node) //Ocassionally checks if successor is empty and replaces with an adress it knows is closest.
-					//go fix_fingers(node)
+					go fix_fingers(node)
 				}
 			} else {
 				log.Println("Already listening on port:", node.port)
@@ -696,9 +696,9 @@ func main() {
 			get(line,node)
 		case strings.HasPrefix(line, "delete "): //delete
 			delete_val(line,node)
-		case strings.HasPrefix(line, "find "):
+		case strings.HasPrefix(line, "find "): //find
 			keyboard_find(line,node)
-		case strings.HasPrefix(line, "hash "):
+		case strings.HasPrefix(line, "hash "): //hash
 			print_hash(line)
 		default:
 			fmt.Println("Not a recognized command, might be missing argument, type 'help' for assistance.")
