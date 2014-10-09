@@ -36,8 +36,9 @@ type Node struct {
 }
 
 type Search struct{
-	value string
-	alt		*big.Int
+	Value string
+	Alt		*big.Int
+	Equals bool
 }
 
 //Helper functions///////////////////////////////////////////
@@ -108,7 +109,7 @@ func fix_fingers(n *Node){ //Repeating Proccess
 					//log.Println("Assigning",i,"finger")
 					n.fingers[i] = n.fingers[i-1]
 				}else{
-					next:=Find("",hash,n)
+					next:=Find_ez("",hash,false,n)
 					start = hashString(next)
 					//log.Println("Assigning",i,"finger")
 					n.fingers[i] = next
@@ -126,7 +127,7 @@ func set_node_pred(client *rpc.Client, addr_self string) {
 	}
 }
 
-func open_client(addr string) *rpc.client{
+func open_client(addr string) *rpc.Client{
 	client, err := rpc.DialHTTP("tcp", addr)
 	if err != nil {
 		log.Println("Remote dial Error:", err)
@@ -306,12 +307,7 @@ func put(command string,n *Node) { //Assuming that the string is correct length 
 		Key:   skey,
 		Value: svalue,
 	}
-	var address string
-	src := &Search{
-		value: skey,
-		alt: nil,
-	}
-	n.Find(src,&address)
+	address:=Find_ez(skey,nil,true,n)
 
 	if address != "" {
 		client, err := rpc.DialHTTP("tcp", address)
@@ -347,12 +343,7 @@ func (n Node) Get_respond(key string, reply *string) error {
 func get(command string,n *Node) {
 	skey, _ := get_second_string(command, "get")
 
-	var address string
-	src := &Search{
-		value: skey,
-		alt: nil,
-	}
-	n.Find(src,&address)
+	address:=Find_ez(skey,nil,true,n)
 
 	if address != "" {
 		client, err := rpc.DialHTTP("tcp", address)
@@ -390,12 +381,7 @@ func (n Node) Delete_request(key string, reply *bool) error {
 func delete_val(command string,n *Node) {
 	skey, _ := get_second_string(command, "delete")
 
-	var address string
-	src := &Search{
-		value: skey,
-		alt: nil,
-	}
-	n.Find(src,&address)
+	address:=Find_ez(skey,nil,true,n)
 
 	if address != "" {
 		client, err := rpc.DialHTTP("tcp", address)
@@ -433,13 +419,8 @@ func(n Node) Give_successor(none bool, addr *string)error{
 func keyboard_find(command string,n *Node){
 	skey, _ := get_second_string(command, "find")
 	if skey != ""{
-		log.Println("Looking for value:",value)
-		var ret string
-		src := &Search{
-			value: skey,
-			alt: nil,
-		}
-		n.Find(src,&ret)
+		log.Println("Looking for value:",skey)
+		ret:=Find_ez(skey,nil,false,n)
 		if ret != ""{
 			log.Println("Value lives at:",ret)
 		}else{
@@ -457,104 +438,73 @@ func (n Node) closest_preceding_node(val *big.Int)string{
 	//check finger table first.
 	add := <-n.successor_addr
 	ret := add
+	if ret == n.self_addr{
+		ret = "Successor_is_self"
+	}
 	n.successor_addr <- add
 	return ret
 }
 
 func (n Node) Find(val Search,reply *string)error{
 	var hash *big.Int
-	if val.alt == nil{
-		hash = hashString(val.value)
+	if val.Alt == nil{
+		log.Println("Searching for successor of string:",val.Value)
+		hash = hashString(val.Value)
 	} else{
-		hash = val.alt
+		log.Println("Searchign for successor of hash:",val.Alt)
+		hash = val.Alt
 	}
-
-	var ret string
 	ad := <- n.successor_addr
 	add:= ad //Making a copy and repacking
+	log.Println("Between",n.self_addr,"and",add)
 	n.successor_addr <- ad
-	if between(hashString(n.self_addr),hash,hashString(add),true){
-		ret = add
+	if between(hashString(n.self_addr),hash,hashString(add),val.Equals){
+		log.Println("It is between")
+		*reply = add
 	}else{
 		closest := n.closest_preceding_node(hash)
+		log.Println("Not between, sending it to:",closest)
 		client := open_client(closest)
 		if client == nil{
 			log.Println("Find Error node",closest,"didn't respond")
-			ret = ""
+			*reply = ""
 		}else{
-			src := &Search{
-				value: "",
-				alt: hash,
+			var rep string
+			log.Println("Waiting for Reply")
+			err := client.Call("Node.Find",val,&reply)
+			if err != nil{
+				log.Println("Passing allong find, Error:",err)
 			}
-			var reply string
-			client.call("Node.Find",src,&reply)
-			ret = reply
+			log.Println("Reply is:",rep)
+			*reply = rep
 			close_client(client)
 		}
 	}
 	
-	return ret
+	return nil
 }
 
-/*
-func Find(value string,alt *big.Int,n *Node)string{ //returns an address
-	max_failures := 20
-	var hash *big.Int
-	if alt == nil{
-		hash = hashString(value)
-	} else{
-		hash = alt
-	}
-	start := n.self_addr
-	succ := <- n.successor_addr
-	end := succ
-	n.successor_addr <- succ
-	for{
-		if max_failures < 0{
-			log.Println("Too many failures, ending search for:", value)
-			return ""
-		}
-		if between(hashString(start),hash,hashString(end),true){
-			return end
-		}else{
-			client, err := rpc.DialHTTP("tcp", end)
-			if err != nil {
-				log.Println("Find connect:", err)
-				log.Println("Double checking successor_addr")
-				succ := <- n.successor_addr
-				end = succ
-				n.successor_addr <- succ
-				max_failures--
-			} else {
-				var reply string
-				err := client.Call("Node.Give_successor",true,&reply)
-				if err != nil{
-					log.Println("Find/Query of Successor error:",err)
-					max_failures--
-				}else{
-					if reply != ""{
-						start = end
-						end = reply
-					}else{
-						max_failures--
-					}
-				}
-			}
-		}
-	}
 
+func Find_ez(svalue string,salt *big.Int,equ bool,n *Node)string{ //returns an address
+	var address string
+	src := Search{
+		Value: svalue,
+		Alt: salt,
+		Equals: equ,
+	}
+	log.Println("Find is searching",src)
+	n.Find(src,&address)
+	return address
 }
-*/
+
 func (n Node) Ping_respond(empty bool, reply *bool) error {
 	*reply = true
 	return nil
 }
 
 func ping(address string) bool {
-	client, err := rpc.DialHTTP("tcp", address)
-	if err != nil {
-		log.Println("Ping:", err)
-	} else {
+	client := open_client(address)
+	if client != nil{
 		reply := false
 		err := client.Call("Node.Ping_respond", true, &reply)
 		if err != nil {
@@ -608,14 +558,23 @@ func connect_to_ring(node *Node, command string) bool{
 		log.Println("Ping:", err)
 	} else {
 		log.Println("Joining Ring at:", address)
-		ad := <-node.successor_addr
-		ad = address //Temp address
-		node.successor_addr <- ad
-		correct := Find(node.self_addr,nil,node)
-		add := <-node.successor_addr
-		add = correct;
-		node.successor_addr <- add
-		return true
+		client:=open_client(address)
+		src := Search{
+			Value: node.self_addr,
+			Alt: nil,
+			Equals: false,
+		}
+		var reply string
+		err:=client.Call("Node.Find",src,&reply)
+		if err !=nil{
+			log.Println("Error searching for Successor on joining ring:",err)
+		} else{
+			add := <-node.successor_addr
+			log.Println("Successor is:",reply)
+			add = reply;
+			node.successor_addr <- add
+			return true
+		}
 	}
 	return false
 }
