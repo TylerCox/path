@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"math/rand"
 )
 
 type Data struct {
@@ -240,12 +241,15 @@ func check_predecessor(node *Node){
 
 func(n Node) Give_successor(none bool, addr *[]string)error{
 	ad := <-n.successor_addr
+	/*
 	if ping(ad[0]){
 		*addr = ad
 		n.successor_addr <- ad
 		return nil
 	}
-	*addr = nil
+	*addr = make([]string,3,3)//if no
+	*/
+	*addr = ad
 	n.successor_addr <- ad
 	return nil
 }
@@ -281,9 +285,33 @@ func stabilize(node *Node) { //Repeating Proccess
 		case reply == "missing":
 			//Successor doesn't respond
 			//And no other nodes in successor list
-			ad[0] = node.self_addr
+			ad[0] = ad[1]
+			ad[1] = ad[2]
+			ad[2] = ""
+			if ad[0] == ""{
+				ad[0] = node.self_addr
+			}
 		case reply != "" && between(hashString(node.self_addr),hashString(reply),hashString(ad[0]),false):
 			ad[0] = reply;
+		}
+		if reply != node.self_addr && ad[0] != ""{
+			client:=open_client(ad[0],"Stabilize-Get_all values")
+			if client != nil{
+				reply:=make(map[string]string)
+				err :=client.Call("Node.Get_all",node.self_addr,&reply)
+				if err != nil{
+					log.Println("Error copying data from:", ad[0])
+				}else{
+					var rep bool
+					data := Data{
+						vals: reply,
+					}
+					//log.Println(reply)
+					_=node.Put_all(data,&rep)
+					close_client(client)
+				}
+			}
+
 		}
 		Notify(node.self_addr,ad[0])
 		node.successor_addr <- ad
@@ -338,6 +366,44 @@ func Notify(self_addr string, addr string) {
 		}
 		close_client(client)
 	}
+}
+
+func (n Node) Put_all(copy Data,reply *bool)error{
+	d := <- n.data
+	for key, value := range copy.vals{
+		d.vals[key] = value
+	}
+	n.data <- d
+	return nil
+}
+
+func (n Node) Get_all(addr string, reply *map[string]string)error{
+	d := <- n.data
+	add := <- n.predecessor_addr
+	pred:= add
+	n.predecessor_addr <- add
+	if pred == ""{
+		//If node doesn't have a predecessor yet, then the node will give
+		//All keys that are in front of it around to the back end of the 
+		//Node recieving, holding only the key values it knows of that are
+		//Still behind it until reaching the "predecessor"
+		pred = n.self_addr
+	}
+	gift := make(map[string]string)
+	for key, value := range d.vals{
+		//log.Println(key,"-------------------------------------------")
+		//fmt.Println("start:",hashString(pred))
+		//fmt.Println("mid  :",hashString(key))
+		//fmt.Println("end  :",hashString(addr))
+		if between(hashString(pred),hashString(key),hashString(addr),true){
+			gift[key] = value
+			delete(d.vals,key)
+			//log.Println(key,value)
+		}
+	}
+	n.data <- d
+	*reply = gift
+	return nil
 }
 
 func getLocalAddress() string {
@@ -406,6 +472,41 @@ func (n Node) Put_reciever(pair StringPair, existed *bool) error {
 	return nil
 }
 
+var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+func randSeq(n int) string {
+    b := make([]rune, n)
+    for i := range b {
+        b[i] = letters[rand.Intn(len(letters))]
+    }
+    return string(b)
+}
+
+func put_random(ammount int,n *Node){
+	for i:=0;i<ammount;i++{
+		key:= randSeq(5)
+		val:= randSeq(10)
+		address:=Find_ez(key,nil,true,n)
+		client:= open_client(address,"Opening node to put value")
+		if client == nil {
+			log.Println("Put connect error, client wont respond")
+		} else {
+			reply := false
+			pair := StringPair{
+				Key: key,
+				Value: val,
+			}
+			err := client.Call("Node.Put_reciever", pair, &reply)
+			if err != nil {
+				log.Println("Remote Put Error:", err)
+			} else {
+				log.Println("Success. Key Existed:", reply)
+			}
+			close_client(client)
+		}
+	}
+}
+
 func put(command string,n *Node) { //Assuming that the string is correct length currently
 	skey, remain := get_second_string(command, "put")
 	svalue, _ := get_second_string(remain, skey)
@@ -417,9 +518,9 @@ func put(command string,n *Node) { //Assuming that the string is correct length 
 	address:=Find_ez(skey,nil,true,n)
 
 	if address != "" {
-		client, err := rpc.DialHTTP("tcp", address)
-		if err != nil {
-			log.Println("Put connect:", err)
+		client:= open_client(address,"Opening node to put value")
+		if client == nil {
+			log.Println("Put connect error, client wont respond")
 		} else {
 			reply := false
 			err := client.Call("Node.Put_reciever", pair, &reply)
@@ -629,6 +730,20 @@ func print_hash(command string){
 	log.Println("Hash Position:", hashString(value))
 }
 
+func hash_data(node *Node){
+	data :=<-node.data
+	log.Println("--------------------------------------------")
+	log.Println("Node location")
+	log.Println("      :",hashString(node.self_addr))
+	log.Println("--------------------------------------------")
+	log.Println("Printing key hash values on node")
+	for key,_ := range data.vals{
+		log.Println(key,":",hashString(key))
+	}
+	log.Println()
+	node.data <-data
+}
+
 func dump(node *Node) {
 	ads := <-node.successor_addr
 	adp := <-node.predecessor_addr
@@ -737,6 +852,10 @@ func main() {
 			keyboard_find(line,node)
 		case strings.HasPrefix(line, "hash "): //hash
 			print_hash(line)
+		case strings.HasPrefix(line, "putrand"): //putrand
+			put_random(20,node)
+		case strings.HasPrefix(line, "hashdata"): //hashdata
+			hash_data(node)
 		default:
 			fmt.Println("Not a recognized command, might be missing argument, type 'help' for assistance.")
 
