@@ -29,7 +29,7 @@ type Node struct {
 	port                   string
 	data                   chan *Data
 	self_addr              string
-	successor_addr         chan string
+	successor_addr         chan []string
 	predecessor_addr       chan string
 	fingers 			   []string
 	listening              bool
@@ -96,7 +96,7 @@ func (n Node) closest_preceding_node(val *big.Int)string{
 		}
 	}
 	add := <-n.successor_addr
-	ret := add
+	ret := add[0]
 	if ret == n.self_addr{
 		log.Fatal("Closest Preceding Node is self, infinite loop prevented.")
 	}
@@ -113,7 +113,7 @@ func (n Node) Find(val Search,reply *string)error{
 		hash = val.Alt
 	}
 	ad := <- n.successor_addr
-	add:= ad //Making a copy and repacking
+	add:= ad[0] //Making a copy and repacking
 	n.successor_addr <- ad
 	//log.Println("Between",n.self_addr,"and",add)
 	if between(hashString(n.self_addr),hash,hashString(add),val.Equals){
@@ -238,16 +238,36 @@ func check_predecessor(node *Node){
 }
 
 
-func(n Node) Give_successor(none bool, addr *string)error{
+func(n Node) Give_successor(none bool, addr *[]string)error{
 	ad := <-n.successor_addr
-	if ping(ad){
+	if ping(ad[0]){
 		*addr = ad
 		n.successor_addr <- ad
 		return nil
 	}
-	*addr = ""
+	*addr = nil
 	n.successor_addr <- ad
 	return nil
+}
+
+func Update_successor_list(node *Node){
+	ad := <-node.successor_addr
+	successor := ad[0]
+	node.successor_addr <- ad
+
+	client := open_client(successor,"Update_successor_list")
+	if client == nil{
+		log.Println("No connection while attempting to copy successor list from", ad[0])
+	}else{
+		var reply []string
+		client.Call("Node.Give_successor",false,&reply)
+		ad := <-node.successor_addr
+		ad[1] = reply[0]
+		ad[2]	= reply[1]
+		node.successor_addr <- ad
+		close_client(client)
+	}
+	
 }
 
 func stabilize(node *Node) { //Repeating Proccess
@@ -256,17 +276,18 @@ func stabilize(node *Node) { //Repeating Proccess
 		time.Sleep(time.Second)
 		
 		ad := <-node.successor_addr
-		reply := ask_for_pred(ad)
+		reply := ask_for_pred(ad[0])
 		switch{
 		case reply == "missing":
 			//Successor doesn't respond
 			//And no other nodes in successor list
-			ad = node.self_addr
-		case reply != "" && between(hashString(node.self_addr),hashString(reply),hashString(ad),false):
-			ad = reply;
+			ad[0] = node.self_addr
+		case reply != "" && between(hashString(node.self_addr),hashString(reply),hashString(ad[0]),false):
+			ad[0] = reply;
 		}
-		Notify(node.self_addr,ad)
-		node.successor_addr <- ad		
+		Notify(node.self_addr,ad[0])
+		node.successor_addr <- ad
+		Update_successor_list(node)		
 	}
 }
 
@@ -583,7 +604,7 @@ func connect_to_ring(node *Node, command string) bool{
 		} else{
 			add := <-node.successor_addr
 			log.Println("Successor is:",reply)
-			add = reply;
+			add[0] = reply;
 			node.successor_addr <- add
 			return true
 		}
@@ -614,10 +635,14 @@ func dump(node *Node) {
 	fmt.Println()
 	fmt.Println()
 	log.Println("Listening port:", node.port)
+	log.Println()
 	log.Println("predecessor_addr:", adp)
-	log.Println("Successor_addr:", ads)
+	log.Println("self_addr       :", node.self_addr)
+	log.Println("Successor_addr 1:", ads[0])
+	log.Println("Successor_addr 2:", ads[1])
+	log.Println("Successor_addr 3:", ads[2])
 	log.Println("Listening:", node.listening)
-	log.Println("Self_addr:", node.self_addr)
+	
 	log.Println("Hash Position:", hashString(node.self_addr))
 	node.successor_addr <- ads
 	node.predecessor_addr <- adp
@@ -650,13 +675,13 @@ func main() {
 		port:                   "3410",
 		data:                   make(chan *Data, 1),
 		self_addr:              addr,
-		successor_addr:         make(chan string, 1),
+		successor_addr:         make(chan []string, 1),
 		predecessor_addr:       make(chan string, 1),
 		fingers:				make([]string,161,161),
 		listening:              false,
 	}
 	node.data <- data
-	node.successor_addr <- ""
+	node.successor_addr <- make([]string,3,3)
 	node.predecessor_addr <- ""
 	for scanner.Scan() {
 		line = scanner.Text()
@@ -678,7 +703,7 @@ func main() {
 			if node.listening == false {
 				log.Println("Creating New Ring")
 				add := <- node.successor_addr
-				add = getLocalAddress()+":"+node.port
+				add[0] = getLocalAddress()+":"+node.port
 				node.successor_addr<-add
 				dump(node)
 				go listen(node)
