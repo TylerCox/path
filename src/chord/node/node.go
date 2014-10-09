@@ -17,8 +17,8 @@ import (
 	"math/rand"
 )
 
-type Data struct {
-	vals map[string]string
+type DataM struct {
+	Vals map[string]string
 }
 
 type StringPair struct {
@@ -28,7 +28,7 @@ type StringPair struct {
 
 type Node struct {
 	port                   string
-	data                   chan *Data
+	Data                   chan *DataM
 	self_addr              string
 	successor_addr         chan []string
 	predecessor_addr       chan string
@@ -303,8 +303,8 @@ func stabilize(node *Node) { //Repeating Proccess
 					log.Println("Error copying data from:", ad[0])
 				}else{
 					var rep bool
-					data := Data{
-						vals: reply,
+					data := DataM{
+						Vals: reply,
 					}
 					//log.Println(reply)
 					_=node.Put_all(data,&rep)
@@ -368,17 +368,17 @@ func Notify(self_addr string, addr string) {
 	}
 }
 
-func (n Node) Put_all(copy Data,reply *bool)error{
-	d := <- n.data
-	for key, value := range copy.vals{
-		d.vals[key] = value
+func (n Node) Put_all(copy DataM,reply *bool)error{
+	d := <- n.Data
+	for key, value := range copy.Vals{
+		d.Vals[key] = value
 	}
-	n.data <- d
+	n.Data <- d
 	return nil
 }
 
 func (n Node) Get_all(addr string, reply *map[string]string)error{
-	d := <- n.data
+	d := <- n.Data
 	add := <- n.predecessor_addr
 	pred:= add
 	n.predecessor_addr <- add
@@ -390,18 +390,18 @@ func (n Node) Get_all(addr string, reply *map[string]string)error{
 		pred = n.self_addr
 	}
 	gift := make(map[string]string)
-	for key, value := range d.vals{
+	for key, value := range d.Vals{
 		//log.Println(key,"-------------------------------------------")
 		//fmt.Println("start:",hashString(pred))
 		//fmt.Println("mid  :",hashString(key))
 		//fmt.Println("end  :",hashString(addr))
 		if between(hashString(pred),hashString(key),hashString(addr),true){
 			gift[key] = value
-			delete(d.vals,key)
+			delete(d.Vals,key)
 			//log.Println(key,value)
 		}
 	}
-	n.data <- d
+	n.Data <- d
 	*reply = gift
 	return nil
 }
@@ -458,17 +458,17 @@ func getLocalAddress() string {
 //////////////////////////////////////////////////////////////
 //Server-Keyboard commands////////////////////////////////////
 func (n Node) Put_reciever(pair StringPair, existed *bool) error {
-	m := <-n.data
+	m := <-n.Data
 	key := pair.Key
-	if _, ok := m.vals[key]; ok {
+	if _, ok := m.Vals[key]; ok {
 		*existed = true
-		m.vals[pair.Key] = pair.Value
+		m.Vals[pair.Key] = pair.Value
 	} else {
 		*existed = false
-		m.vals[pair.Key] = pair.Value
+		m.Vals[pair.Key] = pair.Value
 	}
 	log.Println("New Key:",pair.Key,"=>",pair.Value)
-	n.data <- m
+	n.Data <- m
 	return nil
 }
 
@@ -537,13 +537,13 @@ func put(command string,n *Node) { //Assuming that the string is correct length 
 }
 
 func (n Node) Get_respond(key string, reply *string) error {
-	m := <-n.data
-	if _, ok := m.vals[key]; ok {
-		*reply = m.vals[key]
-		n.data <- m
+	m := <-n.Data
+	if _, ok := m.Vals[key]; ok {
+		*reply = m.Vals[key]
+		n.Data <- m
 		return nil
 	}
-	n.data <- m
+	n.Data <- m
 	return errors.New("Key [" + key + "] does not exist")
 
 }
@@ -575,14 +575,14 @@ func get(command string,n *Node) {
 }
 
 func (n Node) Delete_request(key string, reply *bool) error {
-	m := <-n.data
-	if _, ok := m.vals[key]; ok {
-		delete(m.vals, key)
-		n.data <- m
+	m := <-n.Data
+	if _, ok := m.Vals[key]; ok {
+		delete(m.Vals, key)
+		n.Data <- m
 		log.Println("Deleted key:",key)
 		return nil
 	}
-	n.data <- m
+	n.Data <- m
 	return errors.New("Key [" + key + "] does not exist")
 }
 
@@ -731,17 +731,17 @@ func print_hash(command string){
 }
 
 func hash_data(node *Node){
-	data :=<-node.data
+	data :=<-node.Data
 	log.Println("--------------------------------------------")
 	log.Println("Node location")
 	log.Println("      :",hashString(node.self_addr))
 	log.Println("--------------------------------------------")
 	log.Println("Printing key hash values on node")
-	for key,_ := range data.vals{
+	for key,_ := range data.Vals{
 		log.Println(key,":",hashString(key))
 	}
 	log.Println()
-	node.data <-data
+	node.Data <-data
 }
 
 func dump(node *Node) {
@@ -773,9 +773,30 @@ func dump(node *Node) {
 		}
 	}
 	log.Println("-Data---------------------------------------")
-	m := <-node.data
-	log.Println(m.vals)
-	node.data <- m
+	m := <-node.Data
+	log.Println(m.Vals)
+	node.Data <- m
+}
+
+func quit(node *Node){
+	if node.listening{
+		add := <-node.successor_addr
+		if add[0] != node.self_addr{
+			client := open_client(add[0],"Quitting and passing on info")
+			if client == nil{
+				log.Println("Failed to pass on data")
+			}else{
+				data := <-node.Data
+				var none bool
+				err := client.Call("Node.Put_all",data,&none)
+				if err != nil{
+					log.Println("Error Passing on data:",err)
+				}
+			}
+		}else{
+			log.Println("Last remaining Node, data is dumped.")
+		}
+	}
 }
 
 func main() {
@@ -783,19 +804,19 @@ func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Split(bufio.ScanLines)
 	addr := getLocalAddress() + ":3410"
-	data := &Data{
-		vals: make(map[string]string),
+	data := &DataM{
+		Vals: make(map[string]string),
 	}
 	node := &Node{
 		port:                   "3410",
-		data:                   make(chan *Data, 1),
+		Data:                   make(chan *DataM, 1),
 		self_addr:              addr,
 		successor_addr:         make(chan []string, 1),
 		predecessor_addr:       make(chan string, 1),
 		fingers:				make([]string,161,161),
 		listening:              false,
 	}
-	node.data <- data
+	node.Data <- data
 	node.successor_addr <- make([]string,3,3)
 	node.predecessor_addr <- ""
 	for scanner.Scan() {
@@ -804,6 +825,7 @@ func main() {
 		case strings.HasPrefix(line, "help"): //Help
 			fmt.Println("help menu")
 		case strings.HasPrefix(line, "quit"): //Quit
+			quit(node)
 			log.Println("quitting")
 			return
 		case strings.HasPrefix(line, "dump"): //Dump
