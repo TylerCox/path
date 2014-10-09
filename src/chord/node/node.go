@@ -90,10 +90,15 @@ func (elt Node) jump(fingerentry int) *big.Int {
 //
 func (n Node) closest_preceding_node(val *big.Int)string{
 	//check finger table first.
+	for i:=160; i > 0; i--{
+		if n.fingers[i] != "" && between(hashString(n.self_addr),hashString(n.fingers[i]),val,false){
+			return n.fingers[i]
+		}
+	}
 	add := <-n.successor_addr
 	ret := add
 	if ret == n.self_addr{
-		ret = "Successor_is_self"
+		log.Fatal("Closest Preceding Node is self, infinite loop prevented.")
 	}
 	n.successor_addr <- add
 	return ret
@@ -118,7 +123,7 @@ func (n Node) Find(val Search,reply *string)error{
 	}else{
 		closest := n.closest_preceding_node(hash)
 		//log.Println("Not between, sending it to:",closest)
-		client := open_client(closest)
+		client := open_client(closest,"Find")
 		if client == nil{
 			log.Println("Find Error node",closest,"didn't respond")
 			*reply = ""
@@ -194,10 +199,10 @@ func set_node_pred(client *rpc.Client, addr_self string) {
 	}
 }
 
-func open_client(addr string) *rpc.Client{
+func open_client(addr string,caller string) *rpc.Client{
 	client, err := rpc.DialHTTP("tcp", addr)
 	if err != nil {
-		log.Println("Remote dial Error:", err)
+		log.Println("Remote dial Error:", err,"Caller:",caller)
 		return nil
 	}
 	return client
@@ -304,7 +309,7 @@ func (n Node) Notify_Node(addr string, none *bool) error {
 
 func Notify(self_addr string, addr string) {
 	var reply bool
-	client := open_client(addr)
+	client := open_client(addr,self_addr+" Notifying "+addr)
 	if client != nil{
 		err := client.Call("Node.Notify_Node", self_addr, &reply)
 		if err != nil {
@@ -508,7 +513,7 @@ func (n Node) Ping_respond(empty bool, reply *bool) error {
 }
 
 func ping(address string) bool {
-	client := open_client(address)
+	client := open_client(address,"Ping to: "+address)
 	if client != nil{
 		reply := false
 		err := client.Call("Node.Ping_respond", true, &reply)
@@ -565,7 +570,7 @@ func connect_to_ring(node *Node, command string) bool{
 		log.Println("Ping:", err)
 	} else {
 		log.Println("Joining Ring at:", address)
-		client:=open_client(address)
+		client:=open_client(address, "Connect_to_ring")
 		src := Search{
 			Value: node.self_addr,
 			Alt: nil,
