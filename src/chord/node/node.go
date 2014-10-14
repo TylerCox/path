@@ -87,7 +87,7 @@ func (elt Node) jump(fingerentry int) *big.Int {
 
 //////////////////////////////////////////////////////////////////Find
 //
-//
+//			Find Functions
 //
 func (n Node) closest_preceding_node(val *big.Int)string{
 	//check finger table first.
@@ -151,6 +151,57 @@ func Find_ez(svalue string,salt *big.Int,equ bool,n *Node)string{ //returns an a
 	}
 	//log.Println("Find is searching",src)
 	n.Find(src,&address)
+	return address
+}
+func (n Node) Find_Path(val Search,reply *[]string)error{
+	var hash *big.Int
+	if val.Alt == nil{
+		//log.Println("Searching for successor of string:",val.Value)
+		hash = hashString(val.Value)
+	} else{
+		//log.Println("Searchign for successor of hash:",val.Alt)
+		hash = val.Alt
+	}
+	ad := <- n.successor_addr
+	add:= ad[0] //Making a copy and repacking
+	n.successor_addr <- ad
+	//log.Println("Between",n.self_addr,"and",add)
+	if between(hashString(n.self_addr),hash,hashString(add),val.Equals){
+		//log.Println("It is between")
+		*reply = append(*reply, add)
+		//log.Println("Returning address:",*reply )
+	}else{
+		closest := n.closest_preceding_node(hash)
+		*reply = append(*reply, closest)
+		//log.Println("Not between, sending it to:",closest)
+		client := open_client(closest,"Find")
+		if client == nil{
+			log.Println("Find Error node",closest,"didn't respond")
+			*reply = append(*reply, "")
+		}else{
+			//log.Println("Waiting for Reply")
+			rep := make([]string,0)
+			err := client.Call("Node.Find_Path",val,&rep)
+			*reply = append(*reply,rep...)
+
+			if err != nil{
+				log.Println("Passing allong find, Error:",err)
+			}
+			//log.Println("Reply is:",rep)
+			close_client(client)
+		}
+	}
+	return nil
+}
+func Find_Path_ez(svalue string,salt *big.Int,equ bool,n *Node)[]string{ //returns an address
+	address := make([]string,0)
+	src := Search{
+		Value: svalue,
+		Alt: salt,
+		Equals: equ,
+	}
+	//log.Println("Find is searching",src)
+	n.Find_Path(src,&address)
 	return address
 }
 //
@@ -629,6 +680,19 @@ func keyboard_find(command string,n *Node){
 
 }
 
+func keyboard_find_path(command string,n *Node){
+	skey, _ := get_second_string(command, "path")
+	if skey != ""{
+		log.Println("Looking for value:",skey)
+		ret:=Find_Path_ez(skey,nil,false,n)
+		log.Println("Value path:",ret)
+		
+	}else{
+		log.Println("Please type in a non-empty value")
+	}
+
+}
+
 func (n Node) Ping_respond(empty bool, reply *bool) error {
 	*reply = true
 	return nil
@@ -870,6 +934,8 @@ func main() {
 			get(line,node)
 		case strings.HasPrefix(line, "delete "): //delete
 			delete_val(line,node)
+		case strings.HasPrefix(line, "path "): //find
+			keyboard_find_path(line,node)
 		case strings.HasPrefix(line, "find "): //find
 			keyboard_find(line,node)
 		case strings.HasPrefix(line, "hash "): //hash
